@@ -13,6 +13,7 @@ pub mod project_convention_repository;
 pub mod project_repository;
 pub mod security_policy_repository;
 pub mod specification_repository;
+pub mod user_context_repository;
 // Note: component_repository was removed as it was identical to framework_repository
 
 // Re-export repository traits
@@ -27,5 +28,9 @@ pub use project_convention_repository::ProjectConventionRepository;
 pub use project_repository::ProjectRepository;
 pub use security_policy_repository::SecurityPolicyRepository;
 pub use specification_repository::SpecificationRepository;
+pub use user_context_repository::{
+    ContextualTodoRepository, UserDecisionRepository, UserGoalRepository, UserPreferenceRepository,
+    KnownIssueRepository,
+};
 // pub use extended_repositories::{}; // Uncomment when needed
 pub use framework_repository::FrameworkRepository;

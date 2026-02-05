@@ -5,6 +5,7 @@ pub mod query;
 pub mod list;
 pub mod search;
 pub mod get;
+pub mod user_context;
 
 pub use query::QueryCommand;
 pub use list::ListCommand;

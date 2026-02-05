@@ -1,90 +1,20 @@
-/// Output formatting - Interface Segregation Principle
-/// Dedicated abstraction for output formatting, independent from command logic
-use serde_json::Value;
+// Table formatters for user context entities
+// Provides ASCII table output for CLI display
 
-pub trait OutputFormatter {
-    fn format(&self, data: Value) -> String;
-}
-
-pub struct JsonFormatter;
-pub struct TextFormatter;
-pub struct YamlFormatter;
-
-impl OutputFormatter for JsonFormatter {
-    fn format(&self, data: Value) -> String {
-        serde_json::to_string_pretty(&data).unwrap_or_else(|_| "{}".to_string())
-    }
-}
-
-impl OutputFormatter for TextFormatter {
-    fn format(&self, data: Value) -> String {
-        match data {
-            Value::Object(obj) => {
-                let mut output = String::new();
-                
-                // Handle status and count
-                if let Some(status) = obj.get("status") {
-                    output.push_str(&format!("Status: {}\n", status));
-                }
-                if let Some(count) = obj.get("count") {
-                    output.push_str(&format!("Count: {}\n", count));
-                }
-                
-                // Handle data array
-                if let Some(Value::Array(items)) = obj.get("data") {
-                    for item in items {
-                        if let Value::Object(item_obj) = item {
-                            for (key, value) in item_obj.iter() {
-                                output.push_str(&format!("  {}: {}\n", key, value));
-                            }
-                            output.push('\n');
-                        }
-                    }
-                }
-                // Handle data object
-                else if let Some(data_obj) = obj.get("data") {
-                    output.push_str(&format!("{}\n", serde_json::to_string_pretty(data_obj).unwrap_or_default()));
-                }
-                
-                output
-            }
-            _ => data.to_string(),
-        }
-    }
-}
-
-impl OutputFormatter for YamlFormatter {
-    fn format(&self, data: Value) -> String {
-        // Convert JSON to YAML string representation
-        match serde_yaml::to_string(&data) {
-            Ok(yaml) => yaml,
-            Err(_) => serde_json::to_string_pretty(&data).unwrap_or_else(|_| "{}".to_string()),
-        }
-    }
-}
-
-pub fn get_formatter(format: &str) -> Box<dyn OutputFormatter> {
-    match format.to_lowercase().as_str() {
-        "json" => Box::new(JsonFormatter),
-        "text" | "txt" => Box::new(TextFormatter),
-        "yaml" | "yml" => Box::new(YamlFormatter),
-        _ => Box::new(JsonFormatter), // Default to JSON
-    }
-}
-
-// User Context Formatters
 use crate::models::user_context::*;
 
-/// Format helpers for user context entities
-pub mod user_context_format {
-    use super::*;
+pub struct TableFormatter;
 
-    pub fn format_decisions_table(decisions: &[UserDecision]) -> String {
+impl TableFormatter {
+    /// Format a list of decisions as an ASCII table
+    pub fn format_decisions(decisions: &[UserDecision]) -> String {
         if decisions.is_empty() {
             return "No decisions found.".to_string();
         }
 
-        let mut table = String::from("┌─────────────────────┬──────────────┬──────────┬────────────┬───────────┐\n");
+        let mut table = String::from(
+            "┌─────────────────────┬──────────────┬──────────┬────────────┬───────────┐\n",
+        );
         table.push_str("│ ID (first 16 chars) │ Text         │ Category │ Confidence│ Applied   │\n");
         table.push_str("├─────────────────────┼──────────────┼──────────┼────────────┼───────────┤\n");
 
@@ -101,12 +31,15 @@ pub mod user_context_format {
         table
     }
 
-    pub fn format_goals_table(goals: &[UserGoal]) -> String {
+    /// Format a list of goals as an ASCII table
+    pub fn format_goals(goals: &[UserGoal]) -> String {
         if goals.is_empty() {
             return "No goals found.".to_string();
         }
 
-        let mut table = String::from("┌─────────────────────┬────────────┬─────────┬──────────┬──────────┐\n");
+        let mut table = String::from(
+            "┌─────────────────────┬────────────┬─────────┬──────────┬──────────┐\n",
+        );
         table.push_str("│ ID (first 16 chars) │ Goal Text  │ Status  │ Priority │ Progress │\n");
         table.push_str("├─────────────────────┼────────────┼─────────┼──────────┼──────────┤\n");
 
@@ -124,12 +57,15 @@ pub mod user_context_format {
         table
     }
 
-    pub fn format_preferences_table(preferences: &[UserPreference]) -> String {
+    /// Format a list of preferences as an ASCII table
+    pub fn format_preferences(preferences: &[UserPreference]) -> String {
         if preferences.is_empty() {
             return "No preferences found.".to_string();
         }
 
-        let mut table = String::from("┌─────────────────────┬───────────────┬──────────────┬────────┬───────────┐\n");
+        let mut table = String::from(
+            "┌─────────────────────┬───────────────┬──────────────┬────────┬───────────┐\n",
+        );
         table.push_str("│ ID (first 16 chars) │ Name          │ Value        │ Type   │ Frequency │\n");
         table.push_str("├─────────────────────┼───────────────┼──────────────┼────────┼───────────┤\n");
 
@@ -147,12 +83,15 @@ pub mod user_context_format {
         table
     }
 
-    pub fn format_issues_table(issues: &[KnownIssue]) -> String {
+    /// Format a list of issues as an ASCII table
+    pub fn format_issues(issues: &[KnownIssue]) -> String {
         if issues.is_empty() {
             return "No issues found.".to_string();
         }
 
-        let mut table = String::from("┌─────────────────────┬──────────────┬──────────┬────────────┬────────┐\n");
+        let mut table = String::from(
+            "┌─────────────────────┬──────────────┬──────────┬────────────┬────────┐\n",
+        );
         table.push_str("│ ID (first 16 chars) │ Description  │ Category │ Severity   │ Status │\n");
         table.push_str("├─────────────────────┼──────────────┼──────────┼────────────┼────────┤\n");
 
@@ -169,12 +108,15 @@ pub mod user_context_format {
         table
     }
 
-    pub fn format_todos_table(todos: &[ContextualTodo]) -> String {
+    /// Format a list of todos as an ASCII table
+    pub fn format_todos(todos: &[ContextualTodo]) -> String {
         if todos.is_empty() {
             return "No todos found.".to_string();
         }
 
-        let mut table = String::from("┌─────────────────────┬──────────────┬─────────┬──────────┬──────────┐\n");
+        let mut table = String::from(
+            "┌─────────────────────┬──────────────┬─────────┬──────────┬──────────┐\n",
+        );
         table.push_str("│ ID (first 16 chars) │ Task         │ Status  │ Priority │ Context  │\n");
         table.push_str("├─────────────────────┼──────────────┼─────────┼──────────┼──────────┤\n");
 
