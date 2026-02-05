@@ -710,7 +710,7 @@ mod tests {
     #[async_trait]
     impl SpecificationRepository for MockSpecificationRepository {
         async fn create_specification(&self, _spec: &ProjectSpecification) -> Result<ProjectSpecification, McpError> {
-            unimplemented!()
+            Ok(_spec.clone())
         }
 
         async fn find_specification_by_id(&self, id: &str) -> Result<Option<ProjectSpecification>, McpError> {
@@ -732,15 +732,15 @@ mod tests {
         }
 
         async fn update_specification(&self, _spec: &ProjectSpecification) -> Result<ProjectSpecification, McpError> {
-            unimplemented!()
+            Ok(_spec.clone())
         }
 
         async fn delete_specification(&self, _id: &str) -> Result<bool, McpError> {
-            unimplemented!()
+            Ok(true)
         }
 
         async fn create_requirement(&self, _requirement: &Requirement) -> Result<Requirement, McpError> {
-            unimplemented!()
+            Ok(_requirement.clone())
         }
 
         async fn find_requirement_by_id(&self, id: &str) -> Result<Option<Requirement>, McpError> {
@@ -755,15 +755,15 @@ mod tests {
         }
 
         async fn update_requirement(&self, _requirement: &Requirement) -> Result<Requirement, McpError> {
-            unimplemented!()
+            Ok(_requirement.clone())
         }
 
         async fn delete_requirement(&self, _id: &str) -> Result<bool, McpError> {
-            unimplemented!()
+            Ok(true)
         }
 
         async fn create_task(&self, _task: &Task) -> Result<Task, McpError> {
-            unimplemented!()
+            Ok(_task.clone())
         }
 
         async fn find_task_by_id(&self, id: &str) -> Result<Option<Task>, McpError> {
@@ -785,35 +785,35 @@ mod tests {
         }
 
         async fn update_task(&self, _task: &Task) -> Result<Task, McpError> {
-            unimplemented!()
+            Ok(_task.clone())
         }
 
         async fn delete_task(&self, _id: &str) -> Result<bool, McpError> {
-            unimplemented!()
+            Ok(true)
         }
 
         async fn link_requirement_to_context(&self, _requirement_id: &str, _context_id: &str) -> Result<(), McpError> {
-            unimplemented!()
+            Ok(())
         }
 
         async fn link_task_to_context(&self, _task_id: &str, _context_id: &str) -> Result<(), McpError> {
-            unimplemented!()
+            Ok(())
         }
 
         async fn link_task_to_requirement(&self, _task_id: &str, _requirement_id: &str) -> Result<(), McpError> {
-            unimplemented!()
+            Ok(())
         }
 
         async fn unlink_requirement_from_context(&self, _requirement_id: &str, _context_id: &str) -> Result<(), McpError> {
-            unimplemented!()
+            Ok(())
         }
 
         async fn unlink_task_from_context(&self, _task_id: &str, _context_id: &str) -> Result<(), McpError> {
-            unimplemented!()
+            Ok(())
         }
 
         async fn unlink_task_from_requirement(&self, _task_id: &str, _requirement_id: &str) -> Result<(), McpError> {
-            unimplemented!()
+            Ok(())
         }
     }
 
