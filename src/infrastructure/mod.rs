@@ -9,10 +9,6 @@ pub mod sqlite_framework_repository;
 pub mod sqlite_performance_requirement_repository;
 pub mod sqlite_project_repository;
 pub mod sqlite_specification_repository;
-// Note: sqlite_component_repository was removed as it was identical to sqlite_framework_repository
-// TODO: Fix error handling in these files
-// pub mod sqlite_security_policy_repository;
-// pub mod sqlite_extended_repositories;
 
 // Re-export implementations
 pub use sqlite_analytics_repository::SqliteAnalyticsRepository;
@@ -24,7 +20,3 @@ pub use sqlite_framework_repository::SqliteFrameworkRepository;
 pub use sqlite_performance_requirement_repository::SqlitePerformanceRequirementRepository;
 pub use sqlite_project_repository::SqliteProjectRepository;
 pub use sqlite_specification_repository::SqliteSpecificationRepository;
-// Note: SqliteComponentRepository removed - use SqliteFrameworkRepository instead
-// TODO: Re-enable when fixed
-// pub use sqlite_security_policy_repository::SqliteSecurityPolicyRepository;
-// pub use sqlite_extended_repositories::{SqliteProjectConventionRepository, SqliteFeatureContextRepository};
