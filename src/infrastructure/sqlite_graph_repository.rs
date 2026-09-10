@@ -101,7 +101,7 @@ fn row_to_edge(row: &Row) -> rusqlite::Result<GraphEdge> {
     let edge_type_str: String = row.get(4)?;
     // Only known values are ever written; fall back harmlessly if a future
     // writer adds a type this build predates.
-    let edge_type = EdgeType::from_str(&edge_type_str).unwrap_or(EdgeType::Mentions);
+    let edge_type = EdgeType::parse(&edge_type_str).unwrap_or(EdgeType::Mentions);
 
     Ok(GraphEdge {
         id: row.get(0)?,

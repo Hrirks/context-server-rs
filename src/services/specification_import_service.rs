@@ -86,7 +86,7 @@ impl DefaultSpecificationImportService {
     fn extract_project_name(file_path: &Path) -> Result<String> {
         let specs_dir = file_path
             .ancestors()
-            .find(|p| p.file_name().map_or(false, |name| name == "specs"))
+            .find(|p| p.file_name().is_some_and(|name| name == "specs"))
             .ok_or_else(|| anyhow!("File is not in a specs directory"))?;
 
         let project_dir = file_path

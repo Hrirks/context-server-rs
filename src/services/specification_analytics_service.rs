@@ -203,7 +203,6 @@ impl DefaultSpecificationAnalyticsService {
         requirements: &[Requirement],
         tasks: &[Task],
     ) -> SpecificationCompleteness {
-        let completeness_score;
         let mut missing_sections = Vec::new();
         let mut quality_issues = Vec::new();
         let mut recommendations = Vec::new();
@@ -303,7 +302,7 @@ impl DefaultSpecificationAnalyticsService {
             completed_tasks as f64 / tasks.len() as f64
         };
 
-        completeness_score = (content_completeness * 0.4)
+        let completeness_score = (content_completeness * 0.4)
             + (requirements_completeness * 0.3)
             + (tasks_completeness * 0.3);
 
@@ -444,11 +443,9 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
                 .await?;
 
             for task in tasks {
-                let days_in_progress = if let Some(started_at) = task.started_at {
-                    Some((now - started_at).num_days())
-                } else {
-                    None
-                };
+                let days_in_progress = task
+                    .started_at
+                    .map(|started_at| (now - started_at).num_days());
 
                 let is_blocked = task.status == TaskStatus::Blocked;
 
@@ -579,14 +576,13 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
                 if matches!(
                     requirement.status,
                     RequirementStatus::Accepted | RequirementStatus::Tested
-                ) {
-                    if requirement.updated_at >= cutoff_date {
-                        requirements_completed += 1;
+                ) && requirement.updated_at >= cutoff_date
+                {
+                    requirements_completed += 1;
 
-                        let completion_time =
-                            (requirement.updated_at - requirement.created_at).num_days();
-                        requirement_completion_times.push(completion_time as f64);
-                    }
+                    let completion_time =
+                        (requirement.updated_at - requirement.created_at).num_days();
+                    requirement_completion_times.push(completion_time as f64);
                 }
             }
         }

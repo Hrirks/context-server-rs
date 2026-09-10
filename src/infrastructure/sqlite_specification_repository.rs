@@ -962,7 +962,7 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                     })?;
 
                 let dep_rows = dep_stmt
-                    .query_map([&task.id], |row| Ok(row.get::<_, String>(0)?))
+                    .query_map([&task.id], |row| row.get::<_, String>(0))
                     .map_err(|e| {
                         McpError::internal_error(format!("Database error: {}", e), None)
                     })?;
@@ -982,7 +982,7 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                     })?;
 
                 let subtask_rows = subtask_stmt
-                    .query_map([&task.id], |row| Ok(row.get::<_, String>(0)?))
+                    .query_map([&task.id], |row| row.get::<_, String>(0))
                     .map_err(|e| {
                         McpError::internal_error(format!("Database error: {}", e), None)
                     })?;

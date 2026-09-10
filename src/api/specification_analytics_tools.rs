@@ -258,7 +258,7 @@ impl SpecificationAnalyticsTools {
 
         let days = arguments.get("days").and_then(|v| v.as_i64()).unwrap_or(30);
 
-        if days < 1 || days > 365 {
+        if !(1..=365).contains(&days) {
             return Err(McpError::invalid_params(
                 "Days must be between 1 and 365",
                 None,

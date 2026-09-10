@@ -52,7 +52,7 @@ impl EdgeType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "contains" => Some(EdgeType::Contains),
             "imports" => Some(EdgeType::Imports),

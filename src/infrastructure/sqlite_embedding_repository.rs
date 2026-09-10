@@ -110,7 +110,7 @@ impl EmbeddingRepository for SqliteEmbeddingRepository {
         let preprocessing_json = embedding
             .preprocessing_steps
             .as_ref()
-            .map(|steps| serde_json::to_string(steps))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(|e| {
                 McpError::internal_error(

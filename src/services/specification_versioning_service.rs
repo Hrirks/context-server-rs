@@ -95,7 +95,7 @@ impl VersionChangeType {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "created" => VersionChangeType::Created,
             "modified" => VersionChangeType::Modified,
@@ -225,7 +225,7 @@ impl SqliteSpecificationVersioningService {
             raw_content: row.get(4)?,
             parsed_sections,
             change_description: row.get(6)?,
-            change_type: VersionChangeType::from_str(&row.get::<_, String>(7)?),
+            change_type: VersionChangeType::parse(&row.get::<_, String>(7)?),
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
                 .map_err(|_| {
                     rusqlite::Error::InvalidColumnType(
@@ -335,10 +335,7 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         let existing_version = existing_stmt
-            .query_row(
-                [&spec.id, &content_hash],
-                |row| Ok(row.get::<_, String>(0)?),
-            )
+            .query_row([&spec.id, &content_hash], |row| row.get::<_, String>(0))
             .optional()
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
@@ -560,7 +557,7 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
 
         let version_ids: Result<Vec<String>, rusqlite::Error> = stmt
             .query_map([spec_id, &keep_count.to_string()], |row| {
-                Ok(row.get::<_, String>(0)?)
+                row.get::<_, String>(0)
             })
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?
             .collect();

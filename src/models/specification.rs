@@ -83,6 +83,7 @@ impl ProjectSpecification {
 }
 
 /// Types of specifications
+#[allow(clippy::upper_case_acronyms)] // API is a conventional acronym; renaming would change the serde wire format.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SpecType {
     Feature,
@@ -159,6 +160,7 @@ impl SpecContent {
 }
 
 /// Format of specification content
+#[allow(clippy::upper_case_acronyms)] // YAML/JSON are conventional acronyms; renaming would change the serde wire format.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SpecFormat {
     Markdown,

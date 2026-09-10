@@ -60,7 +60,10 @@ fn foreign_keys_are_enforced() {
     )
     .unwrap();
 
-    let orphan = conn.execute("INSERT INTO child (id, parent_id) VALUES ('c1','missing')", []);
+    let orphan = conn.execute(
+        "INSERT INTO child (id, parent_id) VALUES ('c1','missing')",
+        [],
+    );
     assert!(
         orphan.is_err(),
         "inserting an orphan row should violate the FK constraint"
