@@ -4,6 +4,7 @@ pub mod db;
 pub mod enhanced_context_server;
 pub mod infrastructure;
 pub mod models;
+pub mod parser;
 pub mod repositories;
 pub mod services;
 

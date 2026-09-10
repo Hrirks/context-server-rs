@@ -35,6 +35,12 @@ futures-util = "0.3"
 dashmap = "5.5"
 # File system monitoring
 notify = "6.0"
+# Structural parsing. Grammar crates are ABI-locked to the tree-sitter
+# runtime; these four versions were verified to compile and parse together.
+tree-sitter = "0.27"
+tree-sitter-java = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-dart = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"
