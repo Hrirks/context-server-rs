@@ -8,6 +8,7 @@ pub mod context_query_service;
 pub mod development_phase_service;
 pub mod embedding_store_service;
 pub mod framework_service;
+pub mod graph_memory_service;
 pub mod project_service;
 pub mod specification_analytics_service;
 pub mod specification_context_linking_service;
@@ -32,6 +33,7 @@ pub use context_query_service::ContextQueryService;
 pub use development_phase_service::DevelopmentPhaseService;
 pub use embedding_store_service::EmbeddingStoreService;
 pub use framework_service::FrameworkService;
+pub use graph_memory_service::GraphMemoryService;
 pub use project_service::ProjectService;
 pub use specification_analytics_service::{
     DefaultSpecificationAnalyticsService, SpecificationAnalyticsService,

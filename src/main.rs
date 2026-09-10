@@ -5,6 +5,7 @@ mod embedding;
 mod enhanced_context_server;
 mod infrastructure;
 mod models;
+mod parser;
 mod repositories;
 mod services;
 

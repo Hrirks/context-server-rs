@@ -15,6 +15,7 @@ use crate::infrastructure::{
     SqliteEmbeddingRepository,
     SqliteEnhancedContextRepository,
     SqliteFrameworkRepository,
+    SqliteGraphRepository,
     // Note: SqliteComponentRepository removed as it was identical to SqliteFrameworkRepository
     SqlitePerformanceRequirementRepository,
     SqliteProjectRepository,
@@ -42,6 +43,7 @@ use crate::services::{
     DevelopmentPhaseService,
     EmbeddingStoreService,
     FrameworkService,
+    GraphMemoryService,
     ProjectService,
     SpecificationContextLinkingService,
     SpecificationImportService,
@@ -82,6 +84,7 @@ pub struct AppContainer {
     pub specification_context_linking_service: Arc<dyn SpecificationContextLinkingService>,
     pub specification_analytics_service: Arc<dyn SpecificationAnalyticsService>,
     pub embedding_store_service: Arc<EmbeddingStoreService>,
+    pub graph_memory_service: Arc<GraphMemoryService>,
     // Note: component_service removed as it was identical to framework_service
 }
 
@@ -209,6 +212,14 @@ impl AppContainer {
             DEFAULT_EMBEDDING_VERSION,
         ));
 
+        // Create the graph memory service (Phase 5/6)
+        let graph_repository = Arc::new(SqliteGraphRepository::new(pool.clone()));
+        graph_repository.initialize_tables()?;
+        let graph_memory_service = Arc::new(GraphMemoryService::new(
+            graph_repository,
+            Some(embedding_store_service.clone()),
+        ));
+
         // Note: component_service removed as it was identical to framework_service
 
         Ok(AppContainer {
@@ -225,6 +236,7 @@ impl AppContainer {
             specification_context_linking_service,
             specification_analytics_service,
             embedding_store_service,
+            graph_memory_service,
             // Note: component_service removed
         })
     }

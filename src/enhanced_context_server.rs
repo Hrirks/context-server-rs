@@ -477,6 +477,78 @@ impl ServerHandler for EnhancedContextMcpServer {
                 }).as_object().unwrap().clone()),
                 annotations: None,
             },
+
+            // Graph memory tools (Phase 5/6)
+            Tool {
+                name: "index_project".into(),
+                description: Some("Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports edges), and best-effort embed symbol text for semantic search".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project to index"},
+                        "root_path": {"type": "string", "description": "The directory containing the source to index"},
+                        "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
+                    },
+                    "required": ["project_id", "root_path"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
+                name: "search_symbols".into(),
+                description: Some("Search the indexed symbol graph by name (case-insensitive substring)".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"},
+                        "query": {"type": "string", "description": "Name substring to search for"},
+                        "limit": {"type": "integer", "description": "Maximum number of results", "default": 20}
+                    },
+                    "required": ["project_id", "query"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
+                name: "traverse_graph".into(),
+                description: Some("Budgeted breadth-first traversal of the symbol graph from a start symbol".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"},
+                        "start_symbol_id": {"type": "string", "description": "The symbol node ID to start from"},
+                        "max_depth": {"type": "integer", "description": "Maximum hop depth", "default": 3},
+                        "budget": {"type": "integer", "description": "Maximum number of symbol nodes to return", "default": 50},
+                        "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
+                    },
+                    "required": ["project_id", "start_symbol_id"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
+                name: "semantic_search".into(),
+                description: Some("Semantic (cosine-similarity) search over embedded context for a project".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"},
+                        "query": {"type": "string", "description": "The natural-language query"},
+                        "limit": {"type": "integer", "description": "Maximum number of results", "default": 10}
+                    },
+                    "required": ["project_id", "query"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
+                name: "get_graph_stats".into(),
+                description: Some("Report symbol and edge counts for a project's indexed graph".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"}
+                    },
+                    "required": ["project_id"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
         ];
 
         Ok(ListToolsResult {
@@ -2960,6 +3032,137 @@ impl ServerHandler for EnhancedContextMcpServer {
                 analytics_tools
                     .handle_tool_call(&request.name, serde_json::Value::Object(arguments))
                     .await
+            }
+
+            // Graph memory tools (Phase 5/6)
+            "index_project" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+                let root_path =
+                    args.get("root_path")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: root_path", None)
+                        })?;
+                let session_id = args
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+
+                let report = self
+                    .container
+                    .graph_memory_service
+                    .index_directory(project_id, std::path::Path::new(root_path), session_id)
+                    .await?;
+                let content = serde_json::to_string_pretty(&report).map_err(|e| {
+                    McpError::internal_error(format!("Serialization error: {e}"), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(content)]))
+            }
+            "search_symbols" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+                let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
+                    McpError::invalid_params("Missing required parameter: query", None)
+                })?;
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+
+                let symbols = self
+                    .container
+                    .graph_memory_service
+                    .search_symbols(project_id, query, limit)
+                    .await?;
+                let content = serde_json::to_string_pretty(&symbols).map_err(|e| {
+                    McpError::internal_error(format!("Serialization error: {e}"), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(content)]))
+            }
+            "traverse_graph" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+                let start_symbol_id = args
+                    .get("start_symbol_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            "Missing required parameter: start_symbol_id",
+                            None,
+                        )
+                    })?;
+                let max_depth =
+                    args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+                let budget = args.get("budget").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+                let session_id = args
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+
+                let subgraph = self
+                    .container
+                    .graph_memory_service
+                    .traverse(project_id, start_symbol_id, max_depth, budget, session_id)
+                    .await?;
+                let content = serde_json::to_string_pretty(&subgraph).map_err(|e| {
+                    McpError::internal_error(format!("Serialization error: {e}"), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(content)]))
+            }
+            "semantic_search" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+                let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
+                    McpError::invalid_params("Missing required parameter: query", None)
+                })?;
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+
+                let results = self
+                    .container
+                    .embedding_store_service
+                    .search(query, project_id, limit)
+                    .await?;
+                let content = serde_json::to_string_pretty(&results).map_err(|e| {
+                    McpError::internal_error(format!("Serialization error: {e}"), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(content)]))
+            }
+            "get_graph_stats" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+
+                let stats = self
+                    .container
+                    .graph_memory_service
+                    .stats(project_id)
+                    .await?;
+                let content = serde_json::to_string_pretty(&stats).map_err(|e| {
+                    McpError::internal_error(format!("Serialization error: {e}"), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(content)]))
             }
 
             // Fallback for undefined tools
