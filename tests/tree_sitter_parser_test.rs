@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use context_server_rs::parser::chunker;
-use context_server_rs::parser::chunker::{ChunkKind, SemanticChunk};
+use context_server_rs::parser::chunker::{ChunkKind, ReferenceKind, SemanticChunk};
 use context_server_rs::parser::SourceLanguage;
 
 const JAVA_SOURCE: &str = r#"
@@ -135,7 +135,10 @@ fn names_of(chunks: &[SemanticChunk], kind: ChunkKind) -> Vec<String> {
 fn java_extracts_package_imports_and_types() {
     let chunks = chunker::chunk_source(SourceLanguage::Java, JAVA_SOURCE).unwrap();
 
-    assert_eq!(names_of(&chunks, ChunkKind::Class), vec!["Inner", "UserService"]);
+    assert_eq!(
+        names_of(&chunks, ChunkKind::Class),
+        vec!["Inner", "UserService"]
+    );
     assert_eq!(names_of(&chunks, ChunkKind::Interface), vec!["Greeter"]);
     assert_eq!(names_of(&chunks, ChunkKind::Enum), vec!["Color"]);
     assert_eq!(names_of(&chunks, ChunkKind::Record), vec!["Point"]);
@@ -149,7 +152,10 @@ fn java_extracts_package_imports_and_types() {
         imports.iter().any(|line| line.contains("java.util.List")),
         "expected the List import, got {imports:?}"
     );
-    assert!(imports.iter().any(|line| line.contains("static")), "expected the static import");
+    assert!(
+        imports.iter().any(|line| line.contains("static")),
+        "expected the static import"
+    );
 
     assert!(
         chunks.iter().any(|chunk| chunk.kind == ChunkKind::Package),
@@ -261,7 +267,11 @@ fn go_struct_chunks_keep_their_fields() {
 #[test]
 fn go_imports_are_extracted() {
     let chunks = chunker::chunk_source(SourceLanguage::Go, GO_SOURCE).unwrap();
-    assert_eq!(count_of(&chunks, ChunkKind::Import), 1, "one grouped import");
+    assert_eq!(
+        count_of(&chunks, ChunkKind::Import),
+        1,
+        "one grouped import"
+    );
     let declaration = chunks
         .iter()
         .find(|chunk| chunk.kind == ChunkKind::Import)
@@ -307,7 +317,9 @@ fn dart_finds_methods_nested_behind_signature_nodes() {
     let fetch = named(&chunks, "fetchAll");
     assert_eq!(fetch.kind, ChunkKind::Method);
     assert!(
-        fetch.signature.contains("Future<List<User>> fetchAll(String q,"),
+        fetch
+            .signature
+            .contains("Future<List<User>> fetchAll(String q,"),
         "got {}",
         fetch.signature
     );
@@ -331,6 +343,79 @@ fn dart_imports_and_parts_are_extracted() {
     let chunks = chunker::chunk_source(SourceLanguage::Dart, DART_SOURCE).unwrap();
     // two imports plus the part directive, none of which carry a name
     assert_eq!(count_of(&chunks, ChunkKind::Import), 3);
+}
+
+// ---------------------------------------------------------------- references
+
+#[test]
+fn java_references_capture_calls_inherits_and_type_mentions() {
+    let chunks = chunker::chunk_source(
+        SourceLanguage::Java,
+        "class A extends Base implements Runnable {\n  User fetch() { helper(); return new User(); }\n}\n",
+    )
+    .unwrap();
+
+    let class = named(&chunks, "A");
+    let inherit: Vec<&str> = class
+        .references
+        .iter()
+        .filter(|r| r.kind == ReferenceKind::Inherit)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(inherit, vec!["Base", "Runnable"]);
+
+    let fetch = named(&chunks, "fetch");
+    let calls: Vec<&str> = fetch
+        .references
+        .iter()
+        .filter(|r| r.kind == ReferenceKind::Call)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(calls, vec!["helper", "User"]);
+    // The return type is a type mention, distinct from the constructor call.
+    let mentions: Vec<&str> = fetch
+        .references
+        .iter()
+        .filter(|r| r.kind == ReferenceKind::Reference)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(mentions, vec!["User"]);
+}
+
+#[test]
+fn go_references_capture_calls_and_type_mentions() {
+    let chunks = chunker::chunk_source(
+        SourceLanguage::Go,
+        "package p\nfunc A() { B() }\nfunc B() {}\n",
+    )
+    .unwrap();
+
+    let a = named(&chunks, "A");
+    let calls: Vec<&str> = a
+        .references
+        .iter()
+        .filter(|r| r.kind == ReferenceKind::Call)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(calls, vec!["B"]);
+}
+
+#[test]
+fn dart_references_capture_supertypes() {
+    let chunks = chunker::chunk_source(
+        SourceLanguage::Dart,
+        "class A extends Base with Mixin implements Runnable {}\n",
+    )
+    .unwrap();
+
+    let class = named(&chunks, "A");
+    let inherit: Vec<&str> = class
+        .references
+        .iter()
+        .filter(|r| r.kind == ReferenceKind::Inherit)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(inherit, vec!["Base", "Mixin", "Runnable"]);
 }
 
 // ---------------------------------------------------------------- offload
@@ -372,10 +457,9 @@ async fn many_parses_run_concurrently_without_deadlock() {
     for _ in 0..32 {
         let counter = Arc::clone(&completed);
         handles.push(tokio::spawn(async move {
-            let chunks =
-                chunker::chunk_source_async(SourceLanguage::Go, GO_SOURCE.to_string())
-                    .await
-                    .unwrap();
+            let chunks = chunker::chunk_source_async(SourceLanguage::Go, GO_SOURCE.to_string())
+                .await
+                .unwrap();
             assert!(!chunks.is_empty());
             counter.fetch_add(1, Ordering::SeqCst);
         }));
@@ -428,7 +512,9 @@ async fn directory_chunking_merges_every_supported_file() {
     std::fs::write(root.join("B.dart"), "class B { void b() {} }").unwrap();
     std::fs::write(root.join("C.go"), "package c\nfunc C() {}").unwrap();
 
-    let chunks = chunker::chunk_directory_async(root.to_path_buf()).await.unwrap();
+    let chunks = chunker::chunk_directory_async(root.to_path_buf())
+        .await
+        .unwrap();
 
     let all: Vec<String> = chunks.iter().filter_map(|c| c.name.clone()).collect();
     for expected in ["A", "a", "B", "b", "C"] {

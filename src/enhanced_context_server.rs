@@ -481,7 +481,7 @@ impl ServerHandler for EnhancedContextMcpServer {
             // Graph memory tools (Phase 5/6)
             Tool {
                 name: "index_project".into(),
-                description: Some("Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports edges), and best-effort embed symbol text for semantic search".into()),
+                description: Some("Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports/calls/inherits/references edges), and best-effort embed symbol text for semantic search".into()),
                 input_schema: Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -546,6 +546,19 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "project_id": {"type": "string", "description": "The ID of the project"}
                     },
                     "required": ["project_id"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
+                name: "get_conversation_deltas".into(),
+                description: Some("Retrieve the conversation-memory delta log for a session (index/traverse/search events), newest first".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "The conversation session ID"},
+                        "limit": {"type": "integer", "description": "Maximum number of deltas to return", "default": 20}
+                    },
+                    "required": ["session_id"]
                 }).as_object().unwrap().clone()),
                 annotations: None,
             },
@@ -905,17 +918,6 @@ impl ServerHandler for EnhancedContextMcpServer {
                                 "created_at".to_string(),
                             ],
                             example_use: "Tracking specification changes and enabling version comparison".to_string(),
-                        },
-                        TableInfo {
-                            name: "enhanced_context".to_string(),
-                            description: "Enhanced context items with relationships and quality metrics".to_string(),
-                            primary_fields: vec![
-                                "id".to_string(),
-                                "context_type".to_string(),
-                                "quality_score".to_string(),
-                                "relationship_count".to_string(),
-                            ],
-                            example_use: "Storing intelligent context with AI-powered relationship detection".to_string(),
                         },
                         TableInfo {
                             name: "analytics_events".to_string(),
@@ -3160,6 +3162,26 @@ impl ServerHandler for EnhancedContextMcpServer {
                     .stats(project_id)
                     .await?;
                 let content = serde_json::to_string_pretty(&stats).map_err(|e| {
+                    McpError::internal_error(format!("Serialization error: {e}"), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(content)]))
+            }
+            "get_conversation_deltas" => {
+                let args = request.arguments.unwrap_or_default();
+                let session_id =
+                    args.get("session_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: session_id", None)
+                        })?;
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+
+                let deltas = self
+                    .container
+                    .graph_memory_service
+                    .recent_deltas(session_id, limit)
+                    .await?;
+                let content = serde_json::to_string_pretty(&deltas).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
                 Ok(CallToolResult::success(vec![Content::text(content)]))

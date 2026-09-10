@@ -18,6 +18,7 @@ pub enum SourceLanguage {
 }
 
 impl SourceLanguage {
+    #[allow(dead_code)]
     pub const ALL: [SourceLanguage; 3] = [
         SourceLanguage::Java,
         SourceLanguage::Go,

@@ -35,6 +35,7 @@ impl fmt::Display for ArchitectureLayer {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ComponentType {
     Widget,

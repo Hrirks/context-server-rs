@@ -1,10 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::container::AppContainer;
-    use crate::services::{AnalyticsEventType, AnalyticsHelper};
+    use crate::services::analytics_service::AnalyticsEventType;
+    use crate::services::AnalyticsHelper;
     use tempfile::tempdir;
-    use tokio_test;
 
     #[tokio::test]
     async fn test_analytics_service_integration() {

@@ -4,6 +4,7 @@ use rmcp::model::ErrorData as McpError;
 
 /// Repository interface for ProjectSpecification operations (DIP - Dependency Inversion)
 #[async_trait]
+#[allow(dead_code)]
 pub trait SpecificationRepository: Send + Sync {
     async fn create_specification(
         &self,

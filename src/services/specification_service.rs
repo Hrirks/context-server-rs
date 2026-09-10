@@ -1,13 +1,14 @@
 use crate::models::specification::{ProjectSpecification, Requirement, SpecType, Task};
 use crate::repositories::SpecificationRepository;
 use crate::services::SpecificationParser;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
 use std::sync::Arc;
 
 /// Service interface for specification operations
 #[async_trait]
+#[allow(dead_code)]
 pub trait SpecificationService: Send + Sync {
     async fn import_specification_from_file(
         &self,
@@ -339,10 +340,9 @@ impl SpecificationService for DefaultSpecificationService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::specification::{SpecContent, SpecFormat, SpecStatus};
+    use crate::models::specification::{SpecContent, SpecFormat};
     use crate::repositories::SpecificationRepository;
     use async_trait::async_trait;
-    use std::collections::HashMap;
 
     // Mock repository for testing
     struct MockSpecificationRepository;

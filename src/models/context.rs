@@ -73,6 +73,7 @@ pub struct ProjectConvention {
     pub created_at: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureContext {
     pub id: String,

@@ -5,7 +5,6 @@ pub mod sqlite_architectural_decision_repository;
 pub mod sqlite_business_rule_repository;
 pub mod sqlite_development_phase_repository;
 pub mod sqlite_embedding_repository;
-pub mod sqlite_enhanced_context_repository;
 pub mod sqlite_framework_repository;
 pub mod sqlite_graph_repository;
 pub mod sqlite_performance_requirement_repository;
@@ -18,7 +17,6 @@ pub use sqlite_architectural_decision_repository::SqliteArchitecturalDecisionRep
 pub use sqlite_business_rule_repository::SqliteBusinessRuleRepository;
 pub use sqlite_development_phase_repository::SqliteDevelopmentPhaseRepository;
 pub use sqlite_embedding_repository::SqliteEmbeddingRepository;
-pub use sqlite_enhanced_context_repository::SqliteEnhancedContextRepository;
 pub use sqlite_framework_repository::SqliteFrameworkRepository;
 pub use sqlite_graph_repository::SqliteGraphRepository;
 pub use sqlite_performance_requirement_repository::SqlitePerformanceRequirementRepository;

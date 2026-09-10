@@ -6,6 +6,7 @@ use uuid::Uuid;
 /// Helper functions for creating analytics events
 pub struct AnalyticsHelper;
 
+#[allow(dead_code)]
 impl AnalyticsHelper {
     /// Create a context query analytics event
     pub fn create_context_query_event(

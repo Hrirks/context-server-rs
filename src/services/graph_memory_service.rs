@@ -2,9 +2,10 @@
 //!
 //! [`GraphMemoryService`] indexes tree-sitter chunks into `GraphSymbol` nodes
 //! and `GraphEdge` relationships (`contains` for structural nesting, `imports`
-//! for import declarations), then supports name search and budgeted BFS
-//! traversal so an agent can pull a connected fragment of the codebase without
-//! reserializing whole files.
+//! for import declarations, plus `calls`, `inherits`, and `references` resolved
+//! from name mentions), then supports name search and budgeted BFS traversal so
+//! an agent can pull a connected fragment of the codebase without reserializing
+//! whole files.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
@@ -16,7 +17,9 @@ use crate::models::embedding::content_hash;
 use crate::models::graph::{
     ConversationMemory, EdgeType, GraphEdge, GraphStats, GraphSubgraph, GraphSymbol, IndexReport,
 };
-use crate::parser::{chunk_file_async, discover_sources, ChunkKind, SemanticChunk, SourceLanguage};
+use crate::parser::{
+    chunk_file_async, discover_sources, ChunkKind, ReferenceKind, SemanticChunk, SourceLanguage,
+};
 use crate::repositories::GraphRepository;
 use crate::services::EmbeddingStoreService;
 
@@ -61,6 +64,13 @@ impl GraphMemoryService {
         let mut embedded = 0usize;
         let mut embed_failures = 0usize;
 
+        // Lowercased name -> symbol ids, for resolving cross-file call/inherit/
+        // reference names into edges once every symbol is known.
+        let mut name_index: HashMap<String, Vec<String>> = HashMap::new();
+        // References whose target id cannot be resolved until the whole project
+        // has been indexed (a call may target a symbol defined in another file).
+        let mut deferred: Vec<DeferredEdge> = Vec::new();
+
         for file in &files {
             let Some(language) = SourceLanguage::from_path(file) else {
                 continue;
@@ -94,6 +104,7 @@ impl GraphMemoryService {
             let mut chunk_ids = Vec::with_capacity(chunks.len());
             for chunk in &chunks {
                 let name = display_name(chunk);
+                let name_key = name.to_lowercase();
                 let kind = kind_str(chunk.kind);
                 let id = symbol_id(project_id, &file_path, &name, kind, chunk.start_line);
                 let symbol = GraphSymbol {
@@ -111,6 +122,9 @@ impl GraphMemoryService {
                 };
                 self.repository.upsert_symbol(&symbol).await?;
                 symbols_indexed += 1;
+                if indexable_kind(chunk.kind) {
+                    name_index.entry(name_key).or_default().push(id.clone());
+                }
                 chunk_ids.push(id);
             }
 
@@ -139,6 +153,22 @@ impl GraphMemoryService {
                 };
                 self.repository.upsert_edge(&edge).await?;
                 edges_indexed += 1;
+
+                // Defer call/inherit/reference resolution until every symbol in
+                // the project has been indexed (targets may live in other files).
+                for reference in &chunk.references {
+                    let edge_type = match reference.kind {
+                        ReferenceKind::Call => EdgeType::Calls,
+                        ReferenceKind::Inherit => EdgeType::Inherits,
+                        ReferenceKind::Reference => EdgeType::References,
+                    };
+                    deferred.push(DeferredEdge {
+                        source_id: chunk_ids[i].clone(),
+                        edge_type,
+                        target_name: reference.name.clone(),
+                        created_at: now.clone(),
+                    });
+                }
             }
 
             // Best-effort embedding for semantic search.
@@ -161,6 +191,37 @@ impl GraphMemoryService {
                         Err(_) => embed_failures += 1,
                     }
                 }
+            }
+        }
+
+        // Resolve deferred call/inherit/reference names against the full
+        // project name index, emitting one edge per candidate target. A soft
+        // cap keeps a very common name from producing an edge storm.
+        for deferred_edge in &deferred {
+            let Some(targets) = name_index.get(&deferred_edge.target_name.to_lowercase()) else {
+                continue;
+            };
+            for target_id in targets.iter().take(MAX_EDGE_TARGETS) {
+                if *target_id == deferred_edge.source_id {
+                    continue;
+                }
+                let edge = GraphEdge {
+                    id: content_hash(&format!(
+                        "{}\0{}\0{}",
+                        deferred_edge.source_id,
+                        target_id,
+                        deferred_edge.edge_type.as_str()
+                    )),
+                    project_id: project_id.to_string(),
+                    source_id: deferred_edge.source_id.clone(),
+                    target_id: target_id.clone(),
+                    edge_type: deferred_edge.edge_type,
+                    weight: 1.0,
+                    metadata: None,
+                    created_at: deferred_edge.created_at.clone(),
+                };
+                self.repository.upsert_edge(&edge).await?;
+                edges_indexed += 1;
             }
         }
 
@@ -302,6 +363,17 @@ impl GraphMemoryService {
     }
 }
 
+/// A call/inherit/reference name to resolve into an edge after indexing.
+struct DeferredEdge {
+    source_id: String,
+    edge_type: EdgeType,
+    target_name: String,
+    created_at: String,
+}
+
+/// Upper bound on how many same-named symbols a single reference links to.
+const MAX_EDGE_TARGETS: usize = 25;
+
 /// Stable, idempotent id for a symbol node.
 fn symbol_id(
     project_id: &str,
@@ -331,6 +403,13 @@ fn kind_str(kind: ChunkKind) -> &'static str {
         ChunkKind::Constructor => "constructor",
         ChunkKind::Type => "type",
     }
+}
+
+/// Whether a chunk kind names something that can be the target of a
+/// call/inherit/reference edge. Imports and packages are excluded: they are
+/// not callable or referenceable types.
+fn indexable_kind(kind: ChunkKind) -> bool {
+    !matches!(kind, ChunkKind::Package | ChunkKind::Import)
 }
 
 /// The display name for a chunk; derived from the parse when the grammar did
@@ -473,6 +552,47 @@ mod tests {
         assert_eq!(sub.start_id, outer.id);
         assert!(!sub.symbols.is_empty());
         assert!(!sub.budget_exhausted);
+    }
+
+    #[tokio::test]
+    async fn index_resolves_calls_inherits_and_references_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "App.java",
+            "class WidgetBase {}\nclass User {}\nclass AlphaService extends WidgetBase {\n  User fetch() { helper(); return new User(); }\n  void helper() {}\n}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        // AlphaService inherits WidgetBase.
+        let alpha = &service
+            .search_symbols("p1", "AlphaService", 10)
+            .await
+            .unwrap()[0];
+        let sub = service.traverse("p1", &alpha.id, 1, 50, "s").await.unwrap();
+        let names: Vec<&str> = sub.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"WidgetBase"),
+            "expected inherits edge, got {names:?}"
+        );
+
+        // fetch() calls helper() and references User.
+        let fetch = &service.search_symbols("p1", "fetch", 10).await.unwrap()[0];
+        let sub = service.traverse("p1", &fetch.id, 1, 50, "s").await.unwrap();
+        let names: Vec<&str> = sub.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"helper"),
+            "expected calls edge, got {names:?}"
+        );
+        assert!(
+            names.contains(&"User"),
+            "expected references edge, got {names:?}"
+        );
     }
 
     #[tokio::test]

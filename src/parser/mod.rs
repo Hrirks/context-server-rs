@@ -3,8 +3,5 @@
 pub mod chunker;
 pub mod languages;
 
-pub use chunker::{
-    chunk_directory_async, chunk_file_async, chunk_source, chunk_source_async, discover_sources,
-    offload, ChunkKind, ParseError, SemanticChunk,
-};
+pub use chunker::{chunk_file_async, discover_sources, ChunkKind, ReferenceKind, SemanticChunk};
 pub use languages::SourceLanguage;

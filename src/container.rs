@@ -13,7 +13,6 @@ use crate::infrastructure::{
     SqliteBusinessRuleRepository,
     SqliteDevelopmentPhaseRepository,
     SqliteEmbeddingRepository,
-    SqliteEnhancedContextRepository,
     SqliteFrameworkRepository,
     SqliteGraphRepository,
     // Note: SqliteComponentRepository removed as it was identical to SqliteFrameworkRepository
@@ -37,7 +36,6 @@ use crate::services::{
     },
     ArchitectureValidationService,
     ContextQueryService,
-    DefaultSpecificationContextLinkingService,
     DefaultSpecificationImportService,
     DefaultSpecificationService,
     DevelopmentPhaseService,
@@ -45,7 +43,6 @@ use crate::services::{
     FrameworkService,
     GraphMemoryService,
     ProjectService,
-    SpecificationContextLinkingService,
     SpecificationImportService,
     SpecificationService,
     SpecificationVersioningService,
@@ -78,10 +75,10 @@ pub struct AppContainer {
     pub context_crud_service: Box<dyn ContextCrudService>,
     pub framework_service: Box<dyn FrameworkService>,
     pub analytics_service: Box<dyn AnalyticsService>,
+    #[allow(dead_code)]
     pub specification_service: Arc<dyn SpecificationService>,
     pub specification_import_service: Arc<dyn SpecificationImportService>,
     pub specification_versioning_service: Arc<dyn SpecificationVersioningService>,
-    pub specification_context_linking_service: Arc<dyn SpecificationContextLinkingService>,
     pub specification_analytics_service: Arc<dyn SpecificationAnalyticsService>,
     pub embedding_store_service: Arc<EmbeddingStoreService>,
     pub graph_memory_service: Arc<GraphMemoryService>,
@@ -178,22 +175,6 @@ impl AppContainer {
             Arc::new(SqliteSpecificationVersioningService::new(pool.clone()));
         specification_versioning_service.initialize_tables()?;
 
-        // Create enhanced context repository and service
-        let enhanced_context_repository =
-            Arc::new(SqliteEnhancedContextRepository::new(pool.clone()));
-        enhanced_context_repository.initialize_tables()?;
-
-        let specification_context_linking_service =
-            Arc::new(DefaultSpecificationContextLinkingService::new(
-                specification_repository.clone(),
-                enhanced_context_repository,
-                Arc::new(ContextQueryServiceImpl::new(
-                    SqliteBusinessRuleRepository::new(pool.clone()),
-                    SqliteArchitecturalDecisionRepository::new(pool.clone()),
-                    SqlitePerformanceRequirementRepository::new(pool.clone()),
-                )),
-            ));
-
         // Create specification analytics service
         let specification_analytics_service = Arc::new(DefaultSpecificationAnalyticsService::new(
             specification_repository.clone(),
@@ -233,7 +214,6 @@ impl AppContainer {
             specification_service,
             specification_import_service,
             specification_versioning_service,
-            specification_context_linking_service,
             specification_analytics_service,
             embedding_store_service,
             graph_memory_service,

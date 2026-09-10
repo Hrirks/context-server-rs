@@ -28,6 +28,7 @@ pub enum PoolError {
 }
 
 /// A point-in-time snapshot of pool usage.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct PoolStats {
     pub total: usize,
@@ -117,6 +118,7 @@ impl ConnectionPool {
     }
 
     /// Snapshot of current pool usage.
+    #[allow(dead_code)]
     pub fn stats(&self) -> PoolStats {
         let state = self.inner.state.lock().unwrap();
         PoolStats {

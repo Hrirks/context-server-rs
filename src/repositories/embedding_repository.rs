@@ -4,6 +4,7 @@ use rmcp::model::ErrorData as McpError;
 
 /// Persistence for computed embeddings (Phase 4b).
 #[async_trait]
+#[allow(dead_code)]
 pub trait EmbeddingRepository: Send + Sync {
     /// Insert or replace an embedding for its `(context_id, model, version)` key.
     async fn upsert_embedding(&self, embedding: &StoredEmbedding) -> Result<(), McpError>;

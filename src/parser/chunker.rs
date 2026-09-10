@@ -6,6 +6,7 @@
 //! tokio::task::spawn_blocking. The synchronous functions exist for tests and
 //! for callers that are already on a dedicated blocking thread.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -88,6 +89,27 @@ impl ChunkKind {
     }
 }
 
+/// The kind of relationship a [`SymbolReference`] describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceKind {
+    /// A call site: the chunk invokes this name (function, method, constructor).
+    Call,
+    /// A supertype: the chunk extends/implements this name.
+    Inherit,
+    /// A type mention: the chunk uses this name as a type in a field/signature.
+    Reference,
+}
+
+/// A name mentioned inside a chunk, resolved into a graph edge after indexing.
+#[derive(Debug, Clone, Serialize)]
+pub struct SymbolReference {
+    pub kind: ReferenceKind,
+    pub name: String,
+    /// 1-based line where the reference occurs.
+    pub line: usize,
+}
+
 /// One isolated, individually addressable piece of a source file.
 #[derive(Debug, Clone, Serialize)]
 pub struct SemanticChunk {
@@ -105,6 +127,8 @@ pub struct SemanticChunk {
     pub text: String,
     /// Index into the same result vector of the enclosing container chunk.
     pub parent: Option<usize>,
+    /// Names this chunk references: calls, supertypes, and type mentions.
+    pub references: Vec<SymbolReference>,
 }
 
 /// Parse one in-memory source string into semantic chunks. Synchronous and
@@ -143,6 +167,7 @@ where
 ///
 /// Parsing must not run on the async runtime: a large file would stall the
 /// executor and the MCP server would stop answering requests mid-parse.
+#[allow(dead_code)]
 pub async fn chunk_source_async(
     language: SourceLanguage,
     source: String,
@@ -205,9 +230,8 @@ pub fn discover_sources(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
 }
 
 /// Discover and parse every supported source under a root, off the runtime.
-pub async fn chunk_directory_async(
-    root: PathBuf,
-) -> Result<Vec<SemanticChunk>, ParseError> {
+#[allow(dead_code)]
+pub async fn chunk_directory_async(root: PathBuf) -> Result<Vec<SemanticChunk>, ParseError> {
     offload(move || {
         let mut chunks = Vec::new();
         for path in discover_sources(&root)? {
@@ -330,7 +354,173 @@ fn build_chunk(
         end_byte: node.end_byte(),
         text,
         parent,
+        references: extract_references(node, language, source),
     }
+}
+
+/// Collect the names a declaration references: call sites, supertypes, and
+/// type mentions. Nested declarations are skipped so each reference is
+/// attributed to exactly one chunk (the innermost one that owns it).
+fn extract_references(node: Node, language: SourceLanguage, source: &str) -> Vec<SymbolReference> {
+    let mut out = Vec::new();
+    let mut consumed = HashSet::new();
+    collect_references(node, language, source, true, &mut out, &mut consumed);
+
+    // De-duplicate by (kind, name) while preserving first-seen order.
+    let mut seen = HashSet::new();
+    out.retain(|reference| seen.insert((reference.kind, reference.name.clone())));
+    out
+}
+
+fn collect_references(
+    node: Node,
+    language: SourceLanguage,
+    source: &str,
+    is_root: bool,
+    out: &mut Vec<SymbolReference>,
+    consumed: &mut HashSet<(usize, usize)>,
+) {
+    let line = node.start_position().row + 1;
+
+    match language {
+        SourceLanguage::Java => match node.kind() {
+            "method_invocation" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    push_reference(out, ReferenceKind::Call, &source[name.byte_range()], line);
+                }
+            }
+            "object_creation_expression" => {
+                if let Some(ty) = node.child_by_field_name("type") {
+                    // The type is consumed as a call target, not a type mention.
+                    consumed.insert((ty.start_byte(), ty.end_byte()));
+                    push_reference(
+                        out,
+                        ReferenceKind::Call,
+                        &last_identifier(&source[ty.byte_range()]),
+                        line,
+                    );
+                }
+            }
+            "superclass" | "super_interfaces" => {
+                for name in type_names_in(node, source) {
+                    push_reference(out, ReferenceKind::Inherit, &name, line);
+                }
+                return; // supertypes are inheritance, not plain type mentions
+            }
+            "type_identifier" | "scoped_type_identifier" => {
+                if !consumed.contains(&(node.start_byte(), node.end_byte())) {
+                    push_reference(
+                        out,
+                        ReferenceKind::Reference,
+                        &last_identifier(&source[node.byte_range()]),
+                        line,
+                    );
+                }
+            }
+            _ => {}
+        },
+        SourceLanguage::Go => match node.kind() {
+            "call_expression" => {
+                if let Some(function) = node.child_by_field_name("function") {
+                    if let Some(name) = callee_name(function, source) {
+                        push_reference(out, ReferenceKind::Call, &name, line);
+                    }
+                }
+            }
+            "type_identifier" => {
+                push_reference(
+                    out,
+                    ReferenceKind::Reference,
+                    &source[node.byte_range()],
+                    line,
+                );
+            }
+            _ => {}
+        },
+        SourceLanguage::Dart => match node.kind() {
+            "method_invocation" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    push_reference(out, ReferenceKind::Call, &source[name.byte_range()], line);
+                }
+            }
+            "call_expression" => {
+                if let Some(function) = node.child_by_field_name("function") {
+                    if let Some(name) = callee_name(function, source) {
+                        push_reference(out, ReferenceKind::Call, &name, line);
+                    }
+                }
+            }
+            "superclass" | "interfaces" => {
+                for name in type_names_in(node, source) {
+                    push_reference(out, ReferenceKind::Inherit, &name, line);
+                }
+                return;
+            }
+            "type_identifier" => {
+                push_reference(
+                    out,
+                    ReferenceKind::Reference,
+                    &source[node.byte_range()],
+                    line,
+                );
+            }
+            _ => {}
+        },
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if !is_root && classify(child, language).is_some() {
+            continue;
+        }
+        collect_references(child, language, source, false, out, consumed);
+    }
+}
+
+fn push_reference(out: &mut Vec<SymbolReference>, kind: ReferenceKind, name: &str, line: usize) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    out.push(SymbolReference {
+        kind,
+        name: name.to_string(),
+        line,
+    });
+}
+
+/// The callee name at a call site: a plain identifier, or the `field` of a
+/// `selector_expression` (`obj.method()`).
+fn callee_name(node: Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" | "field_identifier" => Some(source[node.byte_range()].to_string()),
+        "selector_expression" => node
+            .child_by_field_name("field")
+            .map(|field| source[field.byte_range()].to_string()),
+        _ => None,
+    }
+}
+
+/// Every type name appearing inside a supertype clause (`extends A, B`).
+fn type_names_in(node: Node, source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_type_names(node, source, &mut names);
+    names
+}
+
+fn collect_type_names(node: Node, source: &str, out: &mut Vec<String>) {
+    if node.kind() == "type_identifier" || node.kind() == "scoped_type_identifier" {
+        out.push(last_identifier(&source[node.byte_range()]));
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_type_names(child, source, out);
+    }
+}
+
+/// The final component of a possibly-qualified type (`Outer.Inner` -> `Inner`).
+fn last_identifier(text: &str) -> String {
+    text.rsplit('.').next().unwrap_or(text).trim().to_string()
 }
 
 /// The declaration header: everything before the body.

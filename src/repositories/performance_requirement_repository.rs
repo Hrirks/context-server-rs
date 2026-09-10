@@ -4,6 +4,7 @@ use rmcp::model::ErrorData as McpError;
 
 /// Repository interface for Performance Requirement operations (DIP - Dependency Inversion)
 #[async_trait]
+#[allow(dead_code)]
 pub trait PerformanceRequirementRepository: Send + Sync {
     async fn create(
         &self,

@@ -43,11 +43,13 @@ pub fn configure(conn: &Connection) -> Result<()> {
 }
 
 /// Read back the active journal mode (used by tests to prove WAL is really on).
+#[allow(dead_code)]
 pub fn journal_mode(conn: &Connection) -> Result<String> {
     conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))
 }
 
 /// Read back the active busy timeout in milliseconds.
+#[allow(dead_code)]
 pub fn busy_timeout_ms(conn: &Connection) -> Result<u64> {
     conn.query_row("PRAGMA busy_timeout", [], |row| {
         Ok(row.get::<_, i64>(0)? as u64)
@@ -55,6 +57,7 @@ pub fn busy_timeout_ms(conn: &Connection) -> Result<u64> {
 }
 
 /// Read back whether foreign-key enforcement is active.
+#[allow(dead_code)]
 pub fn foreign_keys_enabled(conn: &Connection) -> Result<bool> {
     conn.query_row("PRAGMA foreign_keys", [], |row| {
         Ok(row.get::<_, i64>(0)? != 0)

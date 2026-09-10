@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 
 /// Service for importing and monitoring Kiro specification files
 #[async_trait]
+#[allow(dead_code)]
 pub trait SpecificationImportService: Send + Sync {
     /// Scan and import all specifications from the .kiro/specs directory
     async fn scan_and_import_specifications(
@@ -42,6 +43,7 @@ pub trait SpecificationImportService: Send + Sync {
 }
 
 /// Represents a change to a specification
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SpecificationChange {
     pub spec_id: String,
@@ -53,6 +55,7 @@ pub struct SpecificationChange {
 }
 
 /// Types of specification changes
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChangeType {
     Created,
@@ -64,6 +67,7 @@ pub enum ChangeType {
 /// Default implementation of SpecificationImportService
 pub struct DefaultSpecificationImportService {
     specification_service: Arc<dyn SpecificationService>,
+    #[allow(dead_code)]
     repository: Arc<dyn SpecificationRepository>,
 }
 
@@ -136,6 +140,7 @@ impl DefaultSpecificationImportService {
     }
 
     /// Create a specification change record
+    #[allow(dead_code)]
     fn create_change_record(
         spec_id: String,
         change_type: ChangeType,
@@ -349,7 +354,6 @@ mod tests {
     use crate::repositories::SpecificationRepository;
     use crate::services::SpecificationService;
     use async_trait::async_trait;
-    use std::collections::HashMap;
     use tempfile::TempDir;
     use tokio::fs;
 

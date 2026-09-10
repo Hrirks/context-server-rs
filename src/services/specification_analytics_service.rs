@@ -108,6 +108,7 @@ pub struct SpecificationHealthReport {
 
 /// Service for specification analytics and progress tracking
 #[async_trait]
+#[allow(dead_code)]
 pub trait SpecificationAnalyticsService: Send + Sync {
     /// Track progress for all requirements in a project
     async fn track_requirements_progress(
@@ -157,6 +158,7 @@ pub trait SpecificationAnalyticsService: Send + Sync {
 /// Default implementation of specification analytics service
 pub struct DefaultSpecificationAnalyticsService {
     specification_repository: Arc<dyn SpecificationRepository>,
+    #[allow(dead_code)]
     analytics_service: Arc<dyn AnalyticsService>,
 }
 

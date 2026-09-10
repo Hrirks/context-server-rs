@@ -204,10 +204,10 @@ mod tests {
         let key = "test_key".to_string();
         let value = serde_json::json!({"name": "test"});
 
-        cache.set(key.clone(), value.clone(), Some(Duration::from_millis(1)));
+        cache.set(key.clone(), value.clone(), Some(Duration::from_millis(50)));
         assert_eq!(cache.get(&key), Some(value));
 
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(100));
         assert_eq!(cache.get(&key), None);
     }
 

@@ -4,6 +4,7 @@ use rmcp::model::ErrorData as McpError;
 
 /// Repository interface for Development Phase operations (DIP - Dependency Inversion)
 #[async_trait]
+#[allow(dead_code)]
 pub trait DevelopmentPhaseRepository: Send + Sync {
     async fn create(&self, phase: &DevelopmentPhase) -> Result<DevelopmentPhase, McpError>;
     async fn find_by_project_id(&self, project_id: &str)

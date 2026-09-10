@@ -14,6 +14,7 @@ impl SpecificationAnalyticsTools {
     }
 
     /// Get available specification analytics tools
+    #[allow(dead_code)]
     pub fn get_tools() -> Vec<Tool> {
         vec![
             Tool {

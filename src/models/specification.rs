@@ -29,6 +29,7 @@ pub struct ProjectSpecification {
     pub metadata: SpecMetadata,
 }
 
+#[allow(dead_code)]
 impl ProjectSpecification {
     pub fn new(
         project_id: ProjectId,
@@ -254,6 +255,7 @@ pub enum Priority {
     Low,
 }
 
+#[allow(dead_code)]
 impl Priority {
     pub fn as_str(&self) -> &str {
         match self {
@@ -283,6 +285,7 @@ pub enum Complexity {
     VeryComplex,
 }
 
+#[allow(dead_code)]
 impl Complexity {
     pub fn as_str(&self) -> &str {
         match self {
@@ -322,6 +325,7 @@ pub struct Requirement {
     pub metadata: RequirementMetadata,
 }
 
+#[allow(dead_code)]
 impl Requirement {
     pub fn new(spec_id: SpecId, title: String, description: String) -> Self {
         let now = Utc::now();
@@ -498,6 +502,7 @@ pub struct Task {
     pub metadata: TaskMetadata,
 }
 
+#[allow(dead_code)]
 impl Task {
     pub fn new(spec_id: SpecId, title: String, description: String) -> Self {
         let now = Utc::now();

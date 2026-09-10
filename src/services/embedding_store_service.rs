@@ -22,6 +22,7 @@ pub struct EmbeddingStoreService {
     version: String,
 }
 
+#[allow(dead_code)]
 impl EmbeddingStoreService {
     pub fn new(
         repository: Arc<dyn EmbeddingRepository>,

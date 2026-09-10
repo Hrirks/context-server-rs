@@ -1,6 +1,6 @@
 use crate::models::specification::{
-    AcceptanceCriterion, CriterionType, ProjectSpecification, Requirement, RequirementStatus,
-    SpecContent, SpecFormat, SpecType, Task, TaskStatus, TaskType,
+    AcceptanceCriterion, CriterionType, ProjectSpecification, Requirement, SpecContent, SpecFormat,
+    SpecType, Task, TaskStatus, TaskType,
 };
 use anyhow::{anyhow, Result};
 use regex::Regex;
@@ -301,7 +301,7 @@ impl SpecificationParser {
 
                 let indent_level = captures[1].len() / 2; // Assuming 2 spaces per level
                 let status_char = &captures[2];
-                let task_number = captures[3].to_string();
+                let _task_number = captures[3].to_string();
                 let task_title = captures[4].to_string();
 
                 let status = TaskStatus::from_checkbox_status(status_char);

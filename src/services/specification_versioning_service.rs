@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 /// Service for managing specification versions and change tracking
 #[async_trait]
+#[allow(dead_code)]
 pub trait SpecificationVersioningService: Send + Sync {
     /// Create a new version of a specification
     async fn create_version(
@@ -83,6 +84,7 @@ pub enum VersionChangeType {
 }
 
 impl VersionChangeType {
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &str {
         match self {
             VersionChangeType::Created => "created",
@@ -193,6 +195,7 @@ impl SqliteSpecificationVersioningService {
     }
 
     /// Calculate content hash for change detection
+    #[allow(dead_code)]
     fn calculate_content_hash(content: &str) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -518,10 +521,10 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
 
     async fn restore_to_version(
         &self,
-        spec_id: &str,
+        _spec_id: &str,
         version_id: &str,
     ) -> Result<ProjectSpecification, McpError> {
-        let version = self.get_version(version_id).await?.ok_or_else(|| {
+        let _version = self.get_version(version_id).await?.ok_or_else(|| {
             McpError::resource_not_found(format!("Version not found: {}", version_id), None)
         })?;
 

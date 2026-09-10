@@ -22,10 +22,9 @@ pub struct GraphSymbol {
 
 /// The kinds of relationship tracked between graph nodes.
 ///
-/// Only `Contains` and `Imports` are extracted today (from the structural
-/// parser's parent links and import declarations); the rest are reserved for a
-/// deeper tree-sitter edge pass and are part of the schema/API now so callers
-/// can rely on stable names.
+/// `Contains` and `Imports` come from the structural parser's parent links and
+/// import declarations. `Calls`, `Inherits`, and `References` are resolved
+/// from name mentions found in each chunk's subtree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeType {

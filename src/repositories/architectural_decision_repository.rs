@@ -4,6 +4,7 @@ use rmcp::model::ErrorData as McpError;
 
 /// Repository interface for Architectural Decision operations (DIP - Dependency Inversion)
 #[async_trait]
+#[allow(dead_code)]
 pub trait ArchitecturalDecisionRepository: Send + Sync {
     async fn create(
         &self,

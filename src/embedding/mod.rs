@@ -34,6 +34,7 @@ pub trait EmbeddingService: Send + Sync {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError>;
 
     /// Embed multiple inputs. The default implementation is sequential.
+    #[allow(dead_code)]
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         let mut out = Vec::with_capacity(texts.len());
         for text in texts {
@@ -48,10 +49,12 @@ pub trait EmbeddingService: Send + Sync {
 /// It produces stable, fixed-length vectors so downstream code (storage,
 /// retrieval, tests) can be exercised without a model server. It is NOT a
 /// semantic embedding and must never be used for production search.
+#[allow(dead_code)]
 pub struct DeterministicEmbeddingBackend {
     dimensions: usize,
 }
 
+#[allow(dead_code)]
 impl DeterministicEmbeddingBackend {
     pub fn new(dimensions: usize) -> Self {
         Self {
@@ -65,6 +68,7 @@ impl DeterministicEmbeddingBackend {
 }
 
 /// FNV-1a, used only to give the deterministic backend stable bucket indices.
+#[allow(dead_code)]
 fn fnv1a(bytes: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes.bytes() {
