@@ -1,6 +1,7 @@
 mod api;
 mod container;
 mod db;
+mod embedding;
 mod enhanced_context_server;
 mod infrastructure;
 mod models;

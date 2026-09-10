@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::db::connection_pool::ConnectionPool;
+use crate::embedding::{EmbeddingService, OllamaEmbeddingBackend};
 
 // Infrastructure layer
 use crate::infrastructure::{
@@ -11,6 +12,7 @@ use crate::infrastructure::{
     SqliteArchitecturalDecisionRepository,
     SqliteBusinessRuleRepository,
     SqliteDevelopmentPhaseRepository,
+    SqliteEmbeddingRepository,
     SqliteEnhancedContextRepository,
     SqliteFrameworkRepository,
     // Note: SqliteComponentRepository removed as it was identical to SqliteFrameworkRepository
@@ -38,6 +40,7 @@ use crate::services::{
     DefaultSpecificationImportService,
     DefaultSpecificationService,
     DevelopmentPhaseService,
+    EmbeddingStoreService,
     FrameworkService,
     ProjectService,
     SpecificationContextLinkingService,
@@ -56,6 +59,12 @@ const POOL_MAX_CONNECTIONS: usize = 8;
 /// How long a checkout waits for a free connection before returning an error.
 const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Default Ollama embedding model. Serving locally over plain HTTP.
+const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
+
+/// Schema version recorded against stored embeddings.
+const DEFAULT_EMBEDDING_VERSION: &str = "1";
+
 /// Application container holding all dependencies
 pub struct AppContainer {
     // Services (following Dependency Inversion Principle)
@@ -72,12 +81,28 @@ pub struct AppContainer {
     pub specification_versioning_service: Arc<dyn SpecificationVersioningService>,
     pub specification_context_linking_service: Arc<dyn SpecificationContextLinkingService>,
     pub specification_analytics_service: Arc<dyn SpecificationAnalyticsService>,
+    pub embedding_store_service: Arc<EmbeddingStoreService>,
     // Note: component_service removed as it was identical to framework_service
 }
 
 impl AppContainer {
-    /// Create a new application container with all dependencies injected
+    /// Create a new application container with all dependencies injected.
+    ///
+    /// Uses a local Ollama embedding backend by default. Embeddings are computed
+    /// lazily (only when an indexing/search tool runs), so constructing the
+    /// container never makes a network call.
     pub fn new(db_path: &str) -> Result<Self> {
+        Self::with_embedding_backend(
+            db_path,
+            Arc::new(OllamaEmbeddingBackend::local(DEFAULT_EMBEDDING_MODEL)),
+        )
+    }
+
+    /// Create a container with a custom embedding backend (tests, non-Ollama).
+    pub fn with_embedding_backend(
+        db_path: &str,
+        embedding_backend: Arc<dyn EmbeddingService>,
+    ) -> Result<Self> {
         let pool = Arc::new(ConnectionPool::new(
             db_path,
             POOL_MAX_CONNECTIONS,
@@ -174,6 +199,16 @@ impl AppContainer {
             ))),
         ));
 
+        // Create the embedding persistence service (Phase 4b)
+        let embedding_repository = Arc::new(SqliteEmbeddingRepository::new(pool.clone()));
+        embedding_repository.initialize_tables()?;
+        let embedding_store_service = Arc::new(EmbeddingStoreService::new(
+            embedding_repository,
+            embedding_backend,
+            DEFAULT_EMBEDDING_MODEL,
+            DEFAULT_EMBEDDING_VERSION,
+        ));
+
         // Note: component_service removed as it was identical to framework_service
 
         Ok(AppContainer {
@@ -189,6 +224,7 @@ impl AppContainer {
             specification_versioning_service,
             specification_context_linking_service,
             specification_analytics_service,
+            embedding_store_service,
             // Note: component_service removed
         })
     }

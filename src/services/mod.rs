@@ -6,6 +6,7 @@ pub mod architecture_validation_service;
 pub mod context_crud_service;
 pub mod context_query_service;
 pub mod development_phase_service;
+pub mod embedding_store_service;
 pub mod framework_service;
 pub mod project_service;
 pub mod specification_analytics_service;
@@ -29,6 +30,7 @@ pub use analytics_service::{
 pub use architecture_validation_service::ArchitectureValidationService;
 pub use context_query_service::ContextQueryService;
 pub use development_phase_service::DevelopmentPhaseService;
+pub use embedding_store_service::EmbeddingStoreService;
 pub use framework_service::FrameworkService;
 pub use project_service::ProjectService;
 pub use specification_analytics_service::{
