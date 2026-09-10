@@ -1,6 +1,8 @@
 pub mod api;
+pub mod cache;
 pub mod container;
 pub mod db;
+pub mod embedding;
 pub mod enhanced_context_server;
 pub mod infrastructure;
 pub mod models;

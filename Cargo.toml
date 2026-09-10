@@ -35,6 +35,10 @@ futures-util = "0.3"
 dashmap = "5.5"
 # File system monitoring
 notify = "6.0"
+# Caching (LRU + TTL) salvaged from origin/enhancements
+lru = "0.12"
+# Real embedding backend (Ollama HTTP; plain HTTP to localhost, no TLS needed)
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 # Structural parsing. Grammar crates are ABI-locked to the tree-sitter
 # runtime; these four versions were verified to compile and parse together.
 tree-sitter = "0.27"
