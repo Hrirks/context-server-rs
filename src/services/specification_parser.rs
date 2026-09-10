@@ -88,8 +88,8 @@ impl SpecificationParser {
 
     /// Parse YAML content
     fn parse_yaml(content: &str) -> Result<SpecContent> {
-        let yaml_value: serde_yaml::Value = serde_yaml::from_str(content)
-            .map_err(|e| anyhow!("Failed to parse YAML: {}", e))?;
+        let yaml_value: serde_yaml::Value =
+            serde_yaml::from_str(content).map_err(|e| anyhow!("Failed to parse YAML: {}", e))?;
 
         let json_value: Value = serde_json::to_value(yaml_value)
             .map_err(|e| anyhow!("Failed to convert YAML to JSON: {}", e))?;
@@ -104,8 +104,8 @@ impl SpecificationParser {
 
     /// Parse JSON content
     fn parse_json(content: &str) -> Result<SpecContent> {
-        let json_value: Value = serde_json::from_str(content)
-            .map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
+        let json_value: Value =
+            serde_json::from_str(content).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
 
         let mut sections = HashMap::new();
         Self::extract_json_sections(&json_value, "", &mut sections);
@@ -202,7 +202,10 @@ impl SpecificationParser {
     }
 
     /// Parse requirements from markdown content
-    pub fn parse_requirements_from_markdown(content: &str, spec_id: String) -> Result<Vec<Requirement>> {
+    pub fn parse_requirements_from_markdown(
+        content: &str,
+        spec_id: String,
+    ) -> Result<Vec<Requirement>> {
         let mut requirements = Vec::new();
         let mut current_requirement: Option<Requirement> = None;
         let mut in_acceptance_criteria = false;
@@ -271,7 +274,8 @@ impl SpecificationParser {
         let mut task_stack: Vec<(usize, String)> = Vec::new(); // (level, task_id)
 
         // Regex patterns
-        let task_item = Regex::new(r"^(\s*)-\s+\[([x\-\s])\]\s+(\d+(?:\.\d+)*\.?)\s+(.+)$").unwrap();
+        let task_item =
+            Regex::new(r"^(\s*)-\s+\[([x\-\s])\]\s+(\d+(?:\.\d+)*\.?)\s+(.+)$").unwrap();
         let task_details = Regex::new(r"^\s*-\s+(.+)$").unwrap();
         let requirements_ref = Regex::new(r"_Requirements:\s+([^_]+)_").unwrap();
 
@@ -313,7 +317,7 @@ impl SpecificationParser {
                 if let Some(captures) = task_details.captures(line) {
                     if let Some(ref mut task) = current_task {
                         let detail = captures[1].to_string();
-                        
+
                         // Check for requirements reference
                         if let Some(req_captures) = requirements_ref.captures(&detail) {
                             let req_refs = req_captures[1].to_string();
@@ -347,7 +351,7 @@ impl SpecificationParser {
                 parent_child_pairs.push((parent_id.clone(), task.id.clone()));
             }
         }
-        
+
         for (parent_id, child_id) in parent_child_pairs {
             if let Some(parent) = tasks.iter_mut().find(|t| t.id == parent_id) {
                 parent.add_subtask(child_id);
@@ -360,7 +364,7 @@ impl SpecificationParser {
     /// Infer task type from title
     fn infer_task_type(title: &str) -> TaskType {
         let title_lower = title.to_lowercase();
-        
+
         if title_lower.contains("test") {
             TaskType::Testing
         } else if title_lower.contains("document") || title_lower.contains("doc") {
@@ -442,27 +446,30 @@ impl SpecificationParser {
 
     /// Validate requirements specification
     fn validate_requirements_spec(content: &SpecContent, issues: &mut Vec<String>) {
-        let has_requirements = content.raw_content.contains("Requirement") 
+        let has_requirements = content.raw_content.contains("Requirement")
             || content.raw_content.contains("requirement");
-        
+
         if !has_requirements {
-            issues.push("Requirements specification should contain requirement definitions".to_string());
+            issues.push(
+                "Requirements specification should contain requirement definitions".to_string(),
+            );
         }
 
-        let has_acceptance_criteria = content.raw_content.contains("Acceptance Criteria") 
+        let has_acceptance_criteria = content.raw_content.contains("Acceptance Criteria")
             || content.raw_content.contains("acceptance criteria");
-        
+
         if !has_acceptance_criteria {
-            issues.push("Requirements specification should contain acceptance criteria".to_string());
+            issues
+                .push("Requirements specification should contain acceptance criteria".to_string());
         }
     }
 
     /// Validate tasks specification
     fn validate_tasks_spec(content: &SpecContent, issues: &mut Vec<String>) {
-        let has_checkboxes = content.raw_content.contains("[ ]") 
-            || content.raw_content.contains("[x]") 
+        let has_checkboxes = content.raw_content.contains("[ ]")
+            || content.raw_content.contains("[x]")
             || content.raw_content.contains("[-]");
-        
+
         if !has_checkboxes {
             issues.push("Tasks specification should contain checkbox items".to_string());
         }
@@ -493,12 +500,16 @@ This section contains requirements.
             "test-project".to_string(),
             "test.md",
             content,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(spec.spec_type, SpecType::Custom("test.md".to_string()));
         assert_eq!(spec.title, "This is a test specification.");
         assert_eq!(spec.content.format, SpecFormat::Markdown);
-        assert!(spec.content.parsed_sections.contains_key("h1-test-specification"));
+        assert!(spec
+            .content
+            .parsed_sections
+            .contains_key("h1-test-specification"));
     }
 
     #[test]
@@ -514,10 +525,9 @@ This section contains requirements.
 2. WHEN user enters invalid credentials THEN system SHALL show error message
 "#;
 
-        let requirements = SpecificationParser::parse_requirements_from_markdown(
-            content,
-            "spec-1".to_string(),
-        ).unwrap();
+        let requirements =
+            SpecificationParser::parse_requirements_from_markdown(content, "spec-1".to_string())
+                .unwrap();
 
         assert_eq!(requirements.len(), 1);
         assert_eq!(requirements[0].title, "Requirement 1");
@@ -536,18 +546,17 @@ This section contains requirements.
   - [ ] 2.2 Subtask two
 "#;
 
-        let tasks = SpecificationParser::parse_tasks_from_markdown(
-            content,
-            "spec-1".to_string(),
-        ).unwrap();
-
-
+        let tasks =
+            SpecificationParser::parse_tasks_from_markdown(content, "spec-1".to_string()).unwrap();
 
         assert_eq!(tasks.len(), 4);
         assert_eq!(tasks[0].status, TaskStatus::Completed);
         assert_eq!(tasks[1].status, TaskStatus::NotStarted);
         // Find the parent task "Start second task"
-        let parent_task = tasks.iter().find(|t| t.title.contains("Start second task")).unwrap();
+        let parent_task = tasks
+            .iter()
+            .find(|t| t.title.contains("Start second task"))
+            .unwrap();
         assert_eq!(parent_task.subtasks.len(), 2);
     }
 
@@ -557,7 +566,10 @@ This section contains requirements.
             "test".to_string(),
             SpecType::Requirements,
             "Test Spec".to_string(),
-            SpecContent::new(SpecFormat::Markdown, "# Test\n\nRequirement 1\n\nAcceptance Criteria".to_string()),
+            SpecContent::new(
+                SpecFormat::Markdown,
+                "# Test\n\nRequirement 1\n\nAcceptance Criteria".to_string(),
+            ),
         );
 
         let issues = SpecificationParser::validate_specification(&spec).unwrap();

@@ -1,12 +1,12 @@
 use crate::models::specification::{
-    ProjectSpecification, Requirement, Task, RequirementStatus, TaskStatus, 
-    Priority, Complexity, SpecStatus, SpecType
+    Complexity, Priority, ProjectSpecification, Requirement, RequirementStatus, SpecStatus,
+    SpecType, Task, TaskStatus,
 };
 use crate::repositories::SpecificationRepository;
-use crate::services::analytics_service::{AnalyticsService, AnalyticsEvent, AnalyticsEventType};
+use crate::services::analytics_service::{AnalyticsEvent, AnalyticsEventType, AnalyticsService};
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, Duration, Utc};
 use rmcp::model::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -110,25 +110,48 @@ pub struct SpecificationHealthReport {
 #[async_trait]
 pub trait SpecificationAnalyticsService: Send + Sync {
     /// Track progress for all requirements in a project
-    async fn track_requirements_progress(&self, project_id: &str) -> Result<Vec<RequirementProgress>, McpError>;
-    
+    async fn track_requirements_progress(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<RequirementProgress>, McpError>;
+
     /// Track progress for all tasks in a project
     async fn track_tasks_progress(&self, project_id: &str) -> Result<Vec<TaskProgress>, McpError>;
-    
+
     /// Analyze completeness of specifications
-    async fn analyze_specification_completeness(&self, project_id: &str) -> Result<Vec<SpecificationCompleteness>, McpError>;
-    
+    async fn analyze_specification_completeness(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<SpecificationCompleteness>, McpError>;
+
     /// Calculate development velocity metrics
-    async fn calculate_development_velocity(&self, project_id: &str, days: i64) -> Result<DevelopmentVelocity, McpError>;
-    
+    async fn calculate_development_velocity(
+        &self,
+        project_id: &str,
+        days: i64,
+    ) -> Result<DevelopmentVelocity, McpError>;
+
     /// Generate comprehensive health report
-    async fn generate_health_report(&self, project_id: &str) -> Result<SpecificationHealthReport, McpError>;
-    
+    async fn generate_health_report(
+        &self,
+        project_id: &str,
+    ) -> Result<SpecificationHealthReport, McpError>;
+
     /// Track task status change event
-    async fn track_task_status_change(&self, task_id: &str, old_status: TaskStatus, new_status: TaskStatus) -> Result<(), McpError>;
-    
+    async fn track_task_status_change(
+        &self,
+        task_id: &str,
+        old_status: TaskStatus,
+        new_status: TaskStatus,
+    ) -> Result<(), McpError>;
+
     /// Track requirement status change event
-    async fn track_requirement_status_change(&self, requirement_id: &str, old_status: RequirementStatus, new_status: RequirementStatus) -> Result<(), McpError>;
+    async fn track_requirement_status_change(
+        &self,
+        requirement_id: &str,
+        old_status: RequirementStatus,
+        new_status: RequirementStatus,
+    ) -> Result<(), McpError>;
 }
 
 /// Default implementation of specification analytics service
@@ -162,7 +185,9 @@ impl DefaultSpecificationAnalyticsService {
                 RequirementStatus::Rejected | RequirementStatus::Deferred => 0.0,
             }
         } else {
-            let satisfied_count = requirement.acceptance_criteria.iter()
+            let satisfied_count = requirement
+                .acceptance_criteria
+                .iter()
                 .filter(|c| c.status == crate::models::specification::CriterionStatus::Satisfied)
                 .count();
             satisfied_count as f64 / requirement.acceptance_criteria.len() as f64
@@ -170,7 +195,12 @@ impl DefaultSpecificationAnalyticsService {
     }
 
     /// Calculate completeness score for a specification
-    fn calculate_specification_completeness(&self, spec: &ProjectSpecification, requirements: &[Requirement], tasks: &[Task]) -> SpecificationCompleteness {
+    fn calculate_specification_completeness(
+        &self,
+        spec: &ProjectSpecification,
+        requirements: &[Requirement],
+        tasks: &[Task],
+    ) -> SpecificationCompleteness {
         let completeness_score;
         let mut missing_sections = Vec::new();
         let mut quality_issues = Vec::new();
@@ -189,23 +219,45 @@ impl DefaultSpecificationAnalyticsService {
         // Check for essential sections based on spec type
         match spec.spec_type {
             SpecType::Requirements => {
-                if !spec.content.raw_content.to_lowercase().contains("acceptance criteria") {
+                if !spec
+                    .content
+                    .raw_content
+                    .to_lowercase()
+                    .contains("acceptance criteria")
+                {
                     missing_sections.push("Acceptance Criteria".to_string());
                 }
-                if !spec.content.raw_content.to_lowercase().contains("user story") {
+                if !spec
+                    .content
+                    .raw_content
+                    .to_lowercase()
+                    .contains("user story")
+                {
                     missing_sections.push("User Stories".to_string());
                 }
             }
             SpecType::Design => {
-                if !spec.content.raw_content.to_lowercase().contains("architecture") {
+                if !spec
+                    .content
+                    .raw_content
+                    .to_lowercase()
+                    .contains("architecture")
+                {
                     missing_sections.push("Architecture".to_string());
                 }
-                if !spec.content.raw_content.to_lowercase().contains("component") {
+                if !spec
+                    .content
+                    .raw_content
+                    .to_lowercase()
+                    .contains("component")
+                {
                     missing_sections.push("Components".to_string());
                 }
             }
             SpecType::Tasks => {
-                if !spec.content.raw_content.contains("[ ]") && !spec.content.raw_content.contains("[x]") {
+                if !spec.content.raw_content.contains("[ ]")
+                    && !spec.content.raw_content.contains("[x]")
+                {
                     missing_sections.push("Task Checkboxes".to_string());
                 }
             }
@@ -221,8 +273,14 @@ impl DefaultSpecificationAnalyticsService {
                 0.5 // Not all specs need requirements
             }
         } else {
-            let completed_requirements = requirements.iter()
-                .filter(|r| matches!(r.status, RequirementStatus::Accepted | RequirementStatus::Tested))
+            let completed_requirements = requirements
+                .iter()
+                .filter(|r| {
+                    matches!(
+                        r.status,
+                        RequirementStatus::Accepted | RequirementStatus::Tested
+                    )
+                })
                 .count();
             completed_requirements as f64 / requirements.len() as f64
         };
@@ -236,20 +294,26 @@ impl DefaultSpecificationAnalyticsService {
                 0.5 // Not all specs need tasks
             }
         } else {
-            let completed_tasks = tasks.iter()
+            let completed_tasks = tasks
+                .iter()
                 .filter(|t| t.status == TaskStatus::Completed)
                 .count();
             completed_tasks as f64 / tasks.len() as f64
         };
 
-        completeness_score = (content_completeness * 0.4) + (requirements_completeness * 0.3) + (tasks_completeness * 0.3);
+        completeness_score = (content_completeness * 0.4)
+            + (requirements_completeness * 0.3)
+            + (tasks_completeness * 0.3);
 
         // Generate recommendations
         if completeness_score < 0.5 {
             recommendations.push("Specification needs significant improvement".to_string());
         }
         if !missing_sections.is_empty() {
-            recommendations.push(format!("Add missing sections: {}", missing_sections.join(", ")));
+            recommendations.push(format!(
+                "Add missing sections: {}",
+                missing_sections.join(", ")
+            ));
         }
         if requirements_completeness < 0.3 {
             recommendations.push("Focus on completing requirements".to_string());
@@ -274,13 +338,17 @@ impl DefaultSpecificationAnalyticsService {
     }
 
     /// Calculate velocity trend based on completion data
-    fn calculate_velocity_trend(&self, recent_completions: usize, historical_completions: usize) -> VelocityTrend {
+    fn calculate_velocity_trend(
+        &self,
+        recent_completions: usize,
+        historical_completions: usize,
+    ) -> VelocityTrend {
         if historical_completions == 0 {
             return VelocityTrend::InsufficientData;
         }
 
         let ratio = recent_completions as f64 / historical_completions as f64;
-        
+
         if ratio > 1.2 {
             VelocityTrend::Increasing
         } else if ratio < 0.8 {
@@ -293,26 +361,44 @@ impl DefaultSpecificationAnalyticsService {
 
 #[async_trait]
 impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
-    async fn track_requirements_progress(&self, project_id: &str) -> Result<Vec<RequirementProgress>, McpError> {
-        let specifications = self.specification_repository.find_specifications_by_project(project_id).await?;
+    async fn track_requirements_progress(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<RequirementProgress>, McpError> {
+        let specifications = self
+            .specification_repository
+            .find_specifications_by_project(project_id)
+            .await?;
         let mut all_progress = Vec::new();
         let now = Utc::now();
 
         for spec in specifications {
-            let requirements = self.specification_repository.find_requirements_by_spec(&spec.id).await?;
-            
+            let requirements = self
+                .specification_repository
+                .find_requirements_by_spec(&spec.id)
+                .await?;
+
             for requirement in requirements {
-                let tasks = self.specification_repository.find_tasks_by_spec(&spec.id).await?;
-                let linked_tasks: Vec<_> = tasks.iter()
+                let tasks = self
+                    .specification_repository
+                    .find_tasks_by_spec(&spec.id)
+                    .await?;
+                let linked_tasks: Vec<_> = tasks
+                    .iter()
                     .filter(|t| t.linked_requirements.contains(&requirement.id))
                     .collect();
-                
-                let completed_tasks_count = linked_tasks.iter()
+
+                let completed_tasks_count = linked_tasks
+                    .iter()
                     .filter(|t| t.status == TaskStatus::Completed)
                     .count();
 
-                let satisfied_criteria_count = requirement.acceptance_criteria.iter()
-                    .filter(|c| c.status == crate::models::specification::CriterionStatus::Satisfied)
+                let satisfied_criteria_count = requirement
+                    .acceptance_criteria
+                    .iter()
+                    .filter(|c| {
+                        c.status == crate::models::specification::CriterionStatus::Satisfied
+                    })
                     .count();
 
                 let completion_percentage = self.calculate_requirement_completion(&requirement);
@@ -342,13 +428,19 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
     }
 
     async fn track_tasks_progress(&self, project_id: &str) -> Result<Vec<TaskProgress>, McpError> {
-        let specifications = self.specification_repository.find_specifications_by_project(project_id).await?;
+        let specifications = self
+            .specification_repository
+            .find_specifications_by_project(project_id)
+            .await?;
         let mut all_progress = Vec::new();
         let now = Utc::now();
 
         for spec in specifications {
-            let tasks = self.specification_repository.find_tasks_by_spec(&spec.id).await?;
-            
+            let tasks = self
+                .specification_repository
+                .find_tasks_by_spec(&spec.id)
+                .await?;
+
             for task in tasks {
                 let days_in_progress = if let Some(started_at) = task.started_at {
                     Some((now - started_at).num_days())
@@ -359,12 +451,17 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
                 let is_blocked = task.status == TaskStatus::Blocked;
 
                 // Count subtasks
-                let all_tasks = self.specification_repository.find_tasks_by_spec(&spec.id).await?;
-                let subtasks: Vec<_> = all_tasks.iter()
+                let all_tasks = self
+                    .specification_repository
+                    .find_tasks_by_spec(&spec.id)
+                    .await?;
+                let subtasks: Vec<_> = all_tasks
+                    .iter()
                     .filter(|t| t.parent_task.as_ref() == Some(&task.id))
                     .collect();
-                
-                let completed_subtasks_count = subtasks.iter()
+
+                let completed_subtasks_count = subtasks
+                    .iter()
                     .filter(|t| t.status == TaskStatus::Completed)
                     .count();
 
@@ -393,25 +490,45 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
         Ok(all_progress)
     }
 
-    async fn analyze_specification_completeness(&self, project_id: &str) -> Result<Vec<SpecificationCompleteness>, McpError> {
-        let specifications = self.specification_repository.find_specifications_by_project(project_id).await?;
+    async fn analyze_specification_completeness(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<SpecificationCompleteness>, McpError> {
+        let specifications = self
+            .specification_repository
+            .find_specifications_by_project(project_id)
+            .await?;
         let mut completeness_analysis = Vec::new();
 
         for spec in specifications {
-            let requirements = self.specification_repository.find_requirements_by_spec(&spec.id).await?;
-            let tasks = self.specification_repository.find_tasks_by_spec(&spec.id).await?;
-            
-            let completeness = self.calculate_specification_completeness(&spec, &requirements, &tasks);
+            let requirements = self
+                .specification_repository
+                .find_requirements_by_spec(&spec.id)
+                .await?;
+            let tasks = self
+                .specification_repository
+                .find_tasks_by_spec(&spec.id)
+                .await?;
+
+            let completeness =
+                self.calculate_specification_completeness(&spec, &requirements, &tasks);
             completeness_analysis.push(completeness);
         }
 
         Ok(completeness_analysis)
     }
 
-    async fn calculate_development_velocity(&self, project_id: &str, days: i64) -> Result<DevelopmentVelocity, McpError> {
+    async fn calculate_development_velocity(
+        &self,
+        project_id: &str,
+        days: i64,
+    ) -> Result<DevelopmentVelocity, McpError> {
         let cutoff_date = Utc::now() - Duration::days(days);
-        let specifications = self.specification_repository.find_specifications_by_project(project_id).await?;
-        
+        let specifications = self
+            .specification_repository
+            .find_specifications_by_project(project_id)
+            .await?;
+
         let mut tasks_completed = 0;
         let mut requirements_completed = 0;
         let mut task_completion_times = Vec::new();
@@ -419,40 +536,53 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
         let mut bottlenecks = Vec::new();
 
         for spec in &specifications {
-            let tasks = self.specification_repository.find_tasks_by_spec(&spec.id).await?;
-            let requirements = self.specification_repository.find_requirements_by_spec(&spec.id).await?;
+            let tasks = self
+                .specification_repository
+                .find_tasks_by_spec(&spec.id)
+                .await?;
+            let requirements = self
+                .specification_repository
+                .find_requirements_by_spec(&spec.id)
+                .await?;
 
             // Count completed tasks in the time period
             for task in &tasks {
                 if let Some(completed_at) = task.completed_at {
                     if completed_at >= cutoff_date {
                         tasks_completed += 1;
-                        
+
                         if let Some(started_at) = task.started_at {
                             let completion_time = (completed_at - started_at).num_days();
                             task_completion_times.push(completion_time as f64);
                         }
                     }
                 }
-                
+
                 // Identify bottlenecks
                 if task.status == TaskStatus::Blocked {
                     bottlenecks.push(format!("Task '{}' is blocked", task.title));
                 }
                 if let Some(days_in_progress) = (Utc::now() - task.created_at).num_days().into() {
                     if days_in_progress > 30 && task.status == TaskStatus::InProgress {
-                        bottlenecks.push(format!("Task '{}' has been in progress for {} days", task.title, days_in_progress));
+                        bottlenecks.push(format!(
+                            "Task '{}' has been in progress for {} days",
+                            task.title, days_in_progress
+                        ));
                     }
                 }
             }
 
             // Count completed requirements in the time period
             for requirement in &requirements {
-                if matches!(requirement.status, RequirementStatus::Accepted | RequirementStatus::Tested) {
+                if matches!(
+                    requirement.status,
+                    RequirementStatus::Accepted | RequirementStatus::Tested
+                ) {
                     if requirement.updated_at >= cutoff_date {
                         requirements_completed += 1;
-                        
-                        let completion_time = (requirement.updated_at - requirement.created_at).num_days();
+
+                        let completion_time =
+                            (requirement.updated_at - requirement.created_at).num_days();
                         requirement_completion_times.push(completion_time as f64);
                     }
                 }
@@ -468,15 +598,19 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
         let average_requirement_completion_time_days = if requirement_completion_times.is_empty() {
             0.0
         } else {
-            requirement_completion_times.iter().sum::<f64>() / requirement_completion_times.len() as f64
+            requirement_completion_times.iter().sum::<f64>()
+                / requirement_completion_times.len() as f64
         };
 
         // Calculate velocity trend (simplified - compare with previous period)
         let previous_cutoff = cutoff_date - Duration::days(days);
         let mut previous_tasks_completed = 0;
-        
+
         for spec in &specifications {
-            let tasks = self.specification_repository.find_tasks_by_spec(&spec.id).await?;
+            let tasks = self
+                .specification_repository
+                .find_tasks_by_spec(&spec.id)
+                .await?;
             for task in &tasks {
                 if let Some(completed_at) = task.completed_at {
                     if completed_at >= previous_cutoff && completed_at < cutoff_date {
@@ -486,7 +620,8 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
             }
         }
 
-        let velocity_trend = self.calculate_velocity_trend(tasks_completed, previous_tasks_completed);
+        let velocity_trend =
+            self.calculate_velocity_trend(tasks_completed, previous_tasks_completed);
 
         // Calculate productivity score (0-100)
         let productivity_score = if days > 0 {
@@ -510,7 +645,10 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
         })
     }
 
-    async fn generate_health_report(&self, project_id: &str) -> Result<SpecificationHealthReport, McpError> {
+    async fn generate_health_report(
+        &self,
+        project_id: &str,
+    ) -> Result<SpecificationHealthReport, McpError> {
         let specifications = self.analyze_specification_completeness(project_id).await?;
         let requirements_progress = self.track_requirements_progress(project_id).await?;
         let tasks_progress = self.track_tasks_progress(project_id).await?;
@@ -520,13 +658,21 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
         let spec_health_avg = if specifications.is_empty() {
             0.0
         } else {
-            specifications.iter().map(|s| s.completeness_score).sum::<f64>() / specifications.len() as f64
+            specifications
+                .iter()
+                .map(|s| s.completeness_score)
+                .sum::<f64>()
+                / specifications.len() as f64
         };
 
         let req_completion_avg = if requirements_progress.is_empty() {
             0.0
         } else {
-            requirements_progress.iter().map(|r| r.completion_percentage).sum::<f64>() / requirements_progress.len() as f64
+            requirements_progress
+                .iter()
+                .map(|r| r.completion_percentage)
+                .sum::<f64>()
+                / requirements_progress.len() as f64
         };
 
         let task_completion_avg = if tasks_progress.is_empty() {
@@ -535,11 +681,12 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
             tasks_progress.iter().map(|t| t.progress).sum::<f64>() / tasks_progress.len() as f64
         };
 
-        let overall_health_score = (spec_health_avg * 0.4) + (req_completion_avg * 0.3) + (task_completion_avg * 0.3);
+        let overall_health_score =
+            (spec_health_avg * 0.4) + (req_completion_avg * 0.3) + (task_completion_avg * 0.3);
 
         // Identify critical issues
         let mut critical_issues = Vec::new();
-        
+
         if overall_health_score < 0.3 {
             critical_issues.push("Overall project health is critically low".to_string());
         }
@@ -549,33 +696,42 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
             critical_issues.push(format!("{} tasks are currently blocked", blocked_tasks));
         }
 
-        let stale_requirements = requirements_progress.iter()
+        let stale_requirements = requirements_progress
+            .iter()
             .filter(|r| r.days_since_last_update > 30)
             .count();
         if stale_requirements > 0 {
-            critical_issues.push(format!("{} requirements haven't been updated in over 30 days", stale_requirements));
+            critical_issues.push(format!(
+                "{} requirements haven't been updated in over 30 days",
+                stale_requirements
+            ));
         }
 
         // Generate recommendations
         let mut recommendations = Vec::new();
-        
+
         if overall_health_score < 0.5 {
             recommendations.push("Focus on improving specification completeness".to_string());
         }
-        
+
         if velocity_metrics.productivity_score < 30.0 {
-            recommendations.push("Consider reviewing development processes to improve velocity".to_string());
+            recommendations
+                .push("Consider reviewing development processes to improve velocity".to_string());
         }
 
         if !velocity_metrics.bottlenecks.is_empty() {
             recommendations.push("Address identified bottlenecks to improve flow".to_string());
         }
 
-        let incomplete_specs = specifications.iter()
+        let incomplete_specs = specifications
+            .iter()
             .filter(|s| s.completeness_score < 0.7)
             .count();
         if incomplete_specs > 0 {
-            recommendations.push(format!("Complete {} incomplete specifications", incomplete_specs));
+            recommendations.push(format!(
+                "Complete {} incomplete specifications",
+                incomplete_specs
+            ));
         }
 
         Ok(SpecificationHealthReport {
@@ -591,7 +747,12 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
         })
     }
 
-    async fn track_task_status_change(&self, task_id: &str, old_status: TaskStatus, new_status: TaskStatus) -> Result<(), McpError> {
+    async fn track_task_status_change(
+        &self,
+        task_id: &str,
+        old_status: TaskStatus,
+        new_status: TaskStatus,
+    ) -> Result<(), McpError> {
         let event = AnalyticsEvent {
             id: Uuid::new_v4().to_string(),
             event_type: AnalyticsEventType::EntityUpdate,
@@ -601,9 +762,18 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
             user_agent: None,
             metadata: {
                 let mut metadata = HashMap::new();
-                metadata.insert("old_status".to_string(), serde_json::Value::String(old_status.as_str().to_string()));
-                metadata.insert("new_status".to_string(), serde_json::Value::String(new_status.as_str().to_string()));
-                metadata.insert("change_type".to_string(), serde_json::Value::String("status_change".to_string()));
+                metadata.insert(
+                    "old_status".to_string(),
+                    serde_json::Value::String(old_status.as_str().to_string()),
+                );
+                metadata.insert(
+                    "new_status".to_string(),
+                    serde_json::Value::String(new_status.as_str().to_string()),
+                );
+                metadata.insert(
+                    "change_type".to_string(),
+                    serde_json::Value::String("status_change".to_string()),
+                );
                 metadata
             },
             timestamp: Utc::now(),
@@ -612,13 +782,22 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
             error_message: None,
         };
 
-        self.analytics_service.track_event(event).await
-            .map_err(|e| McpError::internal_error(format!("Failed to track task status change: {}", e), None))?;
+        self.analytics_service
+            .track_event(event)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to track task status change: {}", e), None)
+            })?;
 
         Ok(())
     }
 
-    async fn track_requirement_status_change(&self, requirement_id: &str, old_status: RequirementStatus, new_status: RequirementStatus) -> Result<(), McpError> {
+    async fn track_requirement_status_change(
+        &self,
+        requirement_id: &str,
+        old_status: RequirementStatus,
+        new_status: RequirementStatus,
+    ) -> Result<(), McpError> {
         let event = AnalyticsEvent {
             id: Uuid::new_v4().to_string(),
             event_type: AnalyticsEventType::EntityUpdate,
@@ -628,9 +807,18 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
             user_agent: None,
             metadata: {
                 let mut metadata = HashMap::new();
-                metadata.insert("old_status".to_string(), serde_json::Value::String(old_status.as_str().to_string()));
-                metadata.insert("new_status".to_string(), serde_json::Value::String(new_status.as_str().to_string()));
-                metadata.insert("change_type".to_string(), serde_json::Value::String("status_change".to_string()));
+                metadata.insert(
+                    "old_status".to_string(),
+                    serde_json::Value::String(old_status.as_str().to_string()),
+                );
+                metadata.insert(
+                    "new_status".to_string(),
+                    serde_json::Value::String(new_status.as_str().to_string()),
+                );
+                metadata.insert(
+                    "change_type".to_string(),
+                    serde_json::Value::String("status_change".to_string()),
+                );
                 metadata
             },
             timestamp: Utc::now(),
@@ -639,8 +827,15 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
             error_message: None,
         };
 
-        self.analytics_service.track_event(event).await
-            .map_err(|e| McpError::internal_error(format!("Failed to track requirement status change: {}", e), None))?;
+        self.analytics_service
+            .track_event(event)
+            .await
+            .map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to track requirement status change: {}", e),
+                    None,
+                )
+            })?;
 
         Ok(())
     }
@@ -649,9 +844,11 @@ impl SpecificationAnalyticsService for DefaultSpecificationAnalyticsService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::specification::{SpecContent, SpecFormat, AcceptanceCriterion, CriterionType, CriterionStatus};
+    use crate::models::specification::{
+        AcceptanceCriterion, CriterionStatus, CriterionType, SpecContent, SpecFormat,
+    };
     use crate::repositories::SpecificationRepository;
-    use crate::services::analytics_service::{AnalyticsService, UsageStatistics, ProjectInsights};
+    use crate::services::analytics_service::{AnalyticsService, ProjectInsights, UsageStatistics};
     use async_trait::async_trait;
 
     // Mock repositories for testing
@@ -672,7 +869,7 @@ mod tests {
 
         fn with_test_data() -> Self {
             let mut repo = Self::new();
-            
+
             // Add test specification
             let spec = ProjectSpecification::new(
                 "test-project".to_string(),
@@ -709,29 +906,49 @@ mod tests {
 
     #[async_trait]
     impl SpecificationRepository for MockSpecificationRepository {
-        async fn create_specification(&self, _spec: &ProjectSpecification) -> Result<ProjectSpecification, McpError> {
+        async fn create_specification(
+            &self,
+            _spec: &ProjectSpecification,
+        ) -> Result<ProjectSpecification, McpError> {
             unimplemented!()
         }
 
-        async fn find_specification_by_id(&self, id: &str) -> Result<Option<ProjectSpecification>, McpError> {
+        async fn find_specification_by_id(
+            &self,
+            id: &str,
+        ) -> Result<Option<ProjectSpecification>, McpError> {
             Ok(self.specifications.iter().find(|s| s.id == id).cloned())
         }
 
-        async fn find_specifications_by_project(&self, project_id: &str) -> Result<Vec<ProjectSpecification>, McpError> {
-            Ok(self.specifications.iter()
+        async fn find_specifications_by_project(
+            &self,
+            project_id: &str,
+        ) -> Result<Vec<ProjectSpecification>, McpError> {
+            Ok(self
+                .specifications
+                .iter()
                 .filter(|s| s.project_id == project_id)
                 .cloned()
                 .collect())
         }
 
-        async fn find_specifications_by_type(&self, project_id: &str, spec_type: &str) -> Result<Vec<ProjectSpecification>, McpError> {
-            Ok(self.specifications.iter()
+        async fn find_specifications_by_type(
+            &self,
+            project_id: &str,
+            spec_type: &str,
+        ) -> Result<Vec<ProjectSpecification>, McpError> {
+            Ok(self
+                .specifications
+                .iter()
                 .filter(|s| s.project_id == project_id && s.spec_type.as_str() == spec_type)
                 .cloned()
                 .collect())
         }
 
-        async fn update_specification(&self, _spec: &ProjectSpecification) -> Result<ProjectSpecification, McpError> {
+        async fn update_specification(
+            &self,
+            _spec: &ProjectSpecification,
+        ) -> Result<ProjectSpecification, McpError> {
             unimplemented!()
         }
 
@@ -739,7 +956,10 @@ mod tests {
             unimplemented!()
         }
 
-        async fn create_requirement(&self, _requirement: &Requirement) -> Result<Requirement, McpError> {
+        async fn create_requirement(
+            &self,
+            _requirement: &Requirement,
+        ) -> Result<Requirement, McpError> {
             unimplemented!()
         }
 
@@ -747,14 +967,22 @@ mod tests {
             Ok(self.requirements.iter().find(|r| r.id == id).cloned())
         }
 
-        async fn find_requirements_by_spec(&self, spec_id: &str) -> Result<Vec<Requirement>, McpError> {
-            Ok(self.requirements.iter()
+        async fn find_requirements_by_spec(
+            &self,
+            spec_id: &str,
+        ) -> Result<Vec<Requirement>, McpError> {
+            Ok(self
+                .requirements
+                .iter()
                 .filter(|r| r.spec_id == spec_id)
                 .cloned()
                 .collect())
         }
 
-        async fn update_requirement(&self, _requirement: &Requirement) -> Result<Requirement, McpError> {
+        async fn update_requirement(
+            &self,
+            _requirement: &Requirement,
+        ) -> Result<Requirement, McpError> {
             unimplemented!()
         }
 
@@ -771,14 +999,22 @@ mod tests {
         }
 
         async fn find_tasks_by_spec(&self, spec_id: &str) -> Result<Vec<Task>, McpError> {
-            Ok(self.tasks.iter()
+            Ok(self
+                .tasks
+                .iter()
                 .filter(|t| t.spec_id == spec_id)
                 .cloned()
                 .collect())
         }
 
-        async fn find_tasks_by_status(&self, spec_id: &str, status: &str) -> Result<Vec<Task>, McpError> {
-            Ok(self.tasks.iter()
+        async fn find_tasks_by_status(
+            &self,
+            spec_id: &str,
+            status: &str,
+        ) -> Result<Vec<Task>, McpError> {
+            Ok(self
+                .tasks
+                .iter()
                 .filter(|t| t.spec_id == spec_id && t.status.as_str() == status)
                 .cloned()
                 .collect())
@@ -792,27 +1028,51 @@ mod tests {
             unimplemented!()
         }
 
-        async fn link_requirement_to_context(&self, _requirement_id: &str, _context_id: &str) -> Result<(), McpError> {
+        async fn link_requirement_to_context(
+            &self,
+            _requirement_id: &str,
+            _context_id: &str,
+        ) -> Result<(), McpError> {
             unimplemented!()
         }
 
-        async fn link_task_to_context(&self, _task_id: &str, _context_id: &str) -> Result<(), McpError> {
+        async fn link_task_to_context(
+            &self,
+            _task_id: &str,
+            _context_id: &str,
+        ) -> Result<(), McpError> {
             unimplemented!()
         }
 
-        async fn link_task_to_requirement(&self, _task_id: &str, _requirement_id: &str) -> Result<(), McpError> {
+        async fn link_task_to_requirement(
+            &self,
+            _task_id: &str,
+            _requirement_id: &str,
+        ) -> Result<(), McpError> {
             unimplemented!()
         }
 
-        async fn unlink_requirement_from_context(&self, _requirement_id: &str, _context_id: &str) -> Result<(), McpError> {
+        async fn unlink_requirement_from_context(
+            &self,
+            _requirement_id: &str,
+            _context_id: &str,
+        ) -> Result<(), McpError> {
             unimplemented!()
         }
 
-        async fn unlink_task_from_context(&self, _task_id: &str, _context_id: &str) -> Result<(), McpError> {
+        async fn unlink_task_from_context(
+            &self,
+            _task_id: &str,
+            _context_id: &str,
+        ) -> Result<(), McpError> {
             unimplemented!()
         }
 
-        async fn unlink_task_from_requirement(&self, _task_id: &str, _requirement_id: &str) -> Result<(), McpError> {
+        async fn unlink_task_from_requirement(
+            &self,
+            _task_id: &str,
+            _requirement_id: &str,
+        ) -> Result<(), McpError> {
             unimplemented!()
         }
     }
@@ -825,7 +1085,11 @@ mod tests {
             Ok(())
         }
 
-        async fn get_entity_usage(&self, _entity_type: &str, _entity_id: &str) -> Result<UsageStatistics> {
+        async fn get_entity_usage(
+            &self,
+            _entity_type: &str,
+            _entity_id: &str,
+        ) -> Result<UsageStatistics> {
             Ok(UsageStatistics {
                 total_queries: 10,
                 successful_queries: 9,
@@ -853,7 +1117,11 @@ mod tests {
             Ok(HashMap::new())
         }
 
-        async fn generate_usage_report(&self, _start_date: DateTime<Utc>, _end_date: DateTime<Utc>) -> Result<serde_json::Value> {
+        async fn generate_usage_report(
+            &self,
+            _start_date: DateTime<Utc>,
+            _end_date: DateTime<Utc>,
+        ) -> Result<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
     }
@@ -864,8 +1132,11 @@ mod tests {
         let analytics_service = Arc::new(MockAnalyticsService);
         let service = DefaultSpecificationAnalyticsService::new(spec_repo, analytics_service);
 
-        let progress = service.track_requirements_progress("test-project").await.unwrap();
-        
+        let progress = service
+            .track_requirements_progress("test-project")
+            .await
+            .unwrap();
+
         assert_eq!(progress.len(), 1);
         assert_eq!(progress[0].title, "Test Requirement");
         assert_eq!(progress[0].acceptance_criteria_count, 1);
@@ -879,7 +1150,7 @@ mod tests {
         let service = DefaultSpecificationAnalyticsService::new(spec_repo, analytics_service);
 
         let progress = service.track_tasks_progress("test-project").await.unwrap();
-        
+
         assert_eq!(progress.len(), 1);
         assert_eq!(progress[0].title, "Test Task");
         assert_eq!(progress[0].progress, 0.5);
@@ -892,8 +1163,11 @@ mod tests {
         let analytics_service = Arc::new(MockAnalyticsService);
         let service = DefaultSpecificationAnalyticsService::new(spec_repo, analytics_service);
 
-        let completeness = service.analyze_specification_completeness("test-project").await.unwrap();
-        
+        let completeness = service
+            .analyze_specification_completeness("test-project")
+            .await
+            .unwrap();
+
         assert_eq!(completeness.len(), 1);
         assert_eq!(completeness[0].title, "Test Specification");
         assert!(completeness[0].completeness_score > 0.0);
@@ -906,8 +1180,11 @@ mod tests {
         let analytics_service = Arc::new(MockAnalyticsService);
         let service = DefaultSpecificationAnalyticsService::new(spec_repo, analytics_service);
 
-        let velocity = service.calculate_development_velocity("test-project", 30).await.unwrap();
-        
+        let velocity = service
+            .calculate_development_velocity("test-project", 30)
+            .await
+            .unwrap();
+
         assert_eq!(velocity.project_id, "test-project");
         assert_eq!(velocity.time_period_days, 30);
         assert!(velocity.productivity_score >= 0.0);
@@ -919,8 +1196,11 @@ mod tests {
         let analytics_service = Arc::new(MockAnalyticsService);
         let service = DefaultSpecificationAnalyticsService::new(spec_repo, analytics_service);
 
-        let report = service.generate_health_report("test-project").await.unwrap();
-        
+        let report = service
+            .generate_health_report("test-project")
+            .await
+            .unwrap();
+
         assert_eq!(report.project_id, "test-project");
         assert!(report.overall_health_score >= 0.0);
         assert_eq!(report.specifications.len(), 1);
@@ -935,12 +1215,10 @@ mod tests {
         let analytics_service = Arc::new(MockAnalyticsService);
         let service = DefaultSpecificationAnalyticsService::new(spec_repo, analytics_service);
 
-        let result = service.track_task_status_change(
-            "task-1",
-            TaskStatus::NotStarted,
-            TaskStatus::InProgress,
-        ).await;
-        
+        let result = service
+            .track_task_status_change("task-1", TaskStatus::NotStarted, TaskStatus::InProgress)
+            .await;
+
         assert!(result.is_ok());
     }
 
@@ -950,12 +1228,14 @@ mod tests {
         let analytics_service = Arc::new(MockAnalyticsService);
         let service = DefaultSpecificationAnalyticsService::new(spec_repo, analytics_service);
 
-        let result = service.track_requirement_status_change(
-            "req-1",
-            RequirementStatus::Draft,
-            RequirementStatus::Defined,
-        ).await;
-        
+        let result = service
+            .track_requirement_status_change(
+                "req-1",
+                RequirementStatus::Draft,
+                RequirementStatus::Defined,
+            )
+            .await;
+
         assert!(result.is_ok());
     }
 }

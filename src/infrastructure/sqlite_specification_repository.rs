@@ -1,7 +1,7 @@
 use crate::models::specification::{
     AcceptanceCriterion, CriterionStatus, CriterionType, Priority, ProjectSpecification,
-    Requirement, RequirementStatus, SpecFormat, SpecStatus, SpecType, Task, TaskStatus, TaskType,
-    SpecContent, RequirementMetadata, TaskMetadata,
+    Requirement, RequirementMetadata, RequirementStatus, SpecContent, SpecFormat, SpecStatus,
+    SpecType, Task, TaskMetadata, TaskStatus, TaskType,
 };
 use crate::repositories::SpecificationRepository;
 use async_trait::async_trait;
@@ -48,7 +48,13 @@ impl SqliteSpecificationRepository {
             )
             "#,
             [],
-        ).map_err(|e| McpError::internal_error(format!("Failed to create specifications table: {}", e), None))?;
+        )
+        .map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to create specifications table: {}", e),
+                None,
+            )
+        })?;
 
         // Create requirements table
         db.execute(
@@ -68,7 +74,10 @@ impl SqliteSpecificationRepository {
             )
             "#,
             [],
-        ).map_err(|e| McpError::internal_error(format!("Failed to create requirements table: {}", e), None))?;
+        )
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to create requirements table: {}", e), None)
+        })?;
 
         // Create acceptance_criteria table
         db.execute(
@@ -85,7 +94,13 @@ impl SqliteSpecificationRepository {
             )
             "#,
             [],
-        ).map_err(|e| McpError::internal_error(format!("Failed to create acceptance_criteria table: {}", e), None))?;
+        )
+        .map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to create acceptance_criteria table: {}", e),
+                None,
+            )
+        })?;
 
         // Create tasks table
         db.execute(
@@ -112,7 +127,10 @@ impl SqliteSpecificationRepository {
             )
             "#,
             [],
-        ).map_err(|e| McpError::internal_error(format!("Failed to create tasks table: {}", e), None))?;
+        )
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to create tasks table: {}", e), None)
+        })?;
 
         // Create task_dependencies table
         db.execute(
@@ -127,7 +145,13 @@ impl SqliteSpecificationRepository {
             )
             "#,
             [],
-        ).map_err(|e| McpError::internal_error(format!("Failed to create task_dependencies table: {}", e), None))?;
+        )
+        .map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to create task_dependencies table: {}", e),
+                None,
+            )
+        })?;
 
         // Create requirement_context_links table
         db.execute(
@@ -141,7 +165,13 @@ impl SqliteSpecificationRepository {
             )
             "#,
             [],
-        ).map_err(|e| McpError::internal_error(format!("Failed to create requirement_context_links table: {}", e), None))?;
+        )
+        .map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to create requirement_context_links table: {}", e),
+                None,
+            )
+        })?;
 
         // Create task_context_links table
         db.execute(
@@ -155,7 +185,13 @@ impl SqliteSpecificationRepository {
             )
             "#,
             [],
-        ).map_err(|e| McpError::internal_error(format!("Failed to create task_context_links table: {}", e), None))?;
+        )
+        .map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to create task_context_links table: {}", e),
+                None,
+            )
+        })?;
 
         // Create task_requirement_links table
         db.execute(
@@ -170,31 +206,46 @@ impl SqliteSpecificationRepository {
             )
             "#,
             [],
-        ).map_err(|e| McpError::internal_error(format!("Failed to create task_requirement_links table: {}", e), None))?;
+        )
+        .map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to create task_requirement_links table: {}", e),
+                None,
+            )
+        })?;
 
         // Create indexes for better performance
         db.execute("CREATE INDEX IF NOT EXISTS idx_specifications_project_id ON specifications (project_id)", [])
             .map_err(|e| McpError::internal_error(format!("Failed to create index: {}", e), None))?;
-        
-        db.execute("CREATE INDEX IF NOT EXISTS idx_requirements_spec_id ON requirements (spec_id)", [])
-            .map_err(|e| McpError::internal_error(format!("Failed to create index: {}", e), None))?;
-        
-        db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_spec_id ON tasks (spec_id)", [])
-            .map_err(|e| McpError::internal_error(format!("Failed to create index: {}", e), None))?;
+
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_requirements_spec_id ON requirements (spec_id)",
+            [],
+        )
+        .map_err(|e| McpError::internal_error(format!("Failed to create index: {}", e), None))?;
+
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_spec_id ON tasks (spec_id)",
+            [],
+        )
+        .map_err(|e| McpError::internal_error(format!("Failed to create index: {}", e), None))?;
 
         Ok(())
     }
 
     fn row_to_specification(row: &Row) -> Result<ProjectSpecification, rusqlite::Error> {
-        let parsed_sections: HashMap<String, String> = row.get::<_, Option<String>>(8)?
+        let parsed_sections: HashMap<String, String> = row
+            .get::<_, Option<String>>(8)?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        let content_metadata: HashMap<String, serde_json::Value> = row.get::<_, Option<String>>(9)?
+        let content_metadata: HashMap<String, serde_json::Value> = row
+            .get::<_, Option<String>>(9)?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        let spec_metadata = row.get::<_, Option<String>>(15)?
+        let spec_metadata = row
+            .get::<_, Option<String>>(15)?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
@@ -213,22 +264,35 @@ impl SqliteSpecificationRepository {
             description: row.get(4)?,
             content,
             requirements: Vec::new(), // Will be loaded separately
-            tasks: Vec::new(), // Will be loaded separately
+            tasks: Vec::new(),        // Will be loaded separately
             status: Self::parse_spec_status(&row.get::<_, String>(10)?),
             version: row.get::<_, i64>(11)? as u32,
             file_path: row.get(12)?,
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(13)?)
-                .map_err(|_| rusqlite::Error::InvalidColumnType(13, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_| {
+                    rusqlite::Error::InvalidColumnType(
+                        13,
+                        "created_at".to_string(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?
                 .with_timezone(&Utc),
             updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(14)?)
-                .map_err(|_| rusqlite::Error::InvalidColumnType(14, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_| {
+                    rusqlite::Error::InvalidColumnType(
+                        14,
+                        "updated_at".to_string(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?
                 .with_timezone(&Utc),
             metadata: spec_metadata,
         })
     }
 
     fn row_to_requirement(row: &Row) -> Result<Requirement, rusqlite::Error> {
-        let metadata: RequirementMetadata = row.get::<_, Option<String>>(9)?
+        let metadata: RequirementMetadata = row
+            .get::<_, Option<String>>(9)?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
@@ -241,29 +305,44 @@ impl SqliteSpecificationRepository {
             acceptance_criteria: Vec::new(), // Will be loaded separately
             priority: Self::parse_priority(&row.get::<_, String>(5)?),
             status: Self::parse_requirement_status(&row.get::<_, String>(6)?),
-            linked_tasks: Vec::new(), // Will be loaded separately
+            linked_tasks: Vec::new(),   // Will be loaded separately
             linked_context: Vec::new(), // Will be loaded separately
-            dependencies: Vec::new(), // Will be loaded separately
+            dependencies: Vec::new(),   // Will be loaded separately
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
-                .map_err(|_| rusqlite::Error::InvalidColumnType(7, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_| {
+                    rusqlite::Error::InvalidColumnType(
+                        7,
+                        "created_at".to_string(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?
                 .with_timezone(&Utc),
             updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(8)?)
-                .map_err(|_| rusqlite::Error::InvalidColumnType(8, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_| {
+                    rusqlite::Error::InvalidColumnType(
+                        8,
+                        "updated_at".to_string(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?
                 .with_timezone(&Utc),
             metadata,
         })
     }
 
     fn row_to_task(row: &Row) -> Result<Task, rusqlite::Error> {
-        let metadata: TaskMetadata = row.get::<_, Option<String>>(15)?
+        let metadata: TaskMetadata = row
+            .get::<_, Option<String>>(15)?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        let started_at = row.get::<_, Option<String>>(13)?
+        let started_at = row
+            .get::<_, Option<String>>(13)?
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
-        let completed_at = row.get::<_, Option<String>>(14)?
+        let completed_at = row
+            .get::<_, Option<String>>(14)?
             .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.with_timezone(&Utc));
 
@@ -275,19 +354,31 @@ impl SqliteSpecificationRepository {
             status: Self::parse_task_status(&row.get::<_, String>(4)?),
             task_type: Self::parse_task_type(&row.get::<_, String>(5)?),
             dependencies: Vec::new(), // Will be loaded separately
-            subtasks: Vec::new(), // Will be loaded separately
+            subtasks: Vec::new(),     // Will be loaded separately
             parent_task: row.get(6)?,
             estimated_effort: row.get(7)?,
             actual_effort: row.get(8)?,
             assigned_to: row.get(9)?,
             linked_requirements: Vec::new(), // Will be loaded separately
-            linked_context: Vec::new(), // Will be loaded separately
+            linked_context: Vec::new(),      // Will be loaded separately
             progress: row.get(10)?,
             created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(11)?)
-                .map_err(|_| rusqlite::Error::InvalidColumnType(11, "created_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_| {
+                    rusqlite::Error::InvalidColumnType(
+                        11,
+                        "created_at".to_string(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?
                 .with_timezone(&Utc),
             updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(12)?)
-                .map_err(|_| rusqlite::Error::InvalidColumnType(12, "updated_at".to_string(), rusqlite::types::Type::Text))?
+                .map_err(|_| {
+                    rusqlite::Error::InvalidColumnType(
+                        12,
+                        "updated_at".to_string(),
+                        rusqlite::types::Type::Text,
+                    )
+                })?
                 .with_timezone(&Utc),
             started_at,
             completed_at,
@@ -377,17 +468,27 @@ impl SqliteSpecificationRepository {
 
 #[async_trait]
 impl SpecificationRepository for SqliteSpecificationRepository {
-    async fn create_specification(&self, spec: &ProjectSpecification) -> Result<ProjectSpecification, McpError> {
+    async fn create_specification(
+        &self,
+        spec: &ProjectSpecification,
+    ) -> Result<ProjectSpecification, McpError> {
         let db = self.db.lock().unwrap();
 
-        let parsed_sections_json = serde_json::to_string(&spec.content.parsed_sections)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize parsed sections: {}", e), None))?;
+        let parsed_sections_json =
+            serde_json::to_string(&spec.content.parsed_sections).map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to serialize parsed sections: {}", e),
+                    None,
+                )
+            })?;
 
-        let content_metadata_json = serde_json::to_string(&spec.content.metadata)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize content metadata: {}", e), None))?;
+        let content_metadata_json = serde_json::to_string(&spec.content.metadata).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize content metadata: {}", e), None)
+        })?;
 
-        let spec_metadata_json = serde_json::to_string(&spec.metadata)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize spec metadata: {}", e), None))?;
+        let spec_metadata_json = serde_json::to_string(&spec.metadata).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize spec metadata: {}", e), None)
+        })?;
 
         db.execute(
             r#"
@@ -418,7 +519,10 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         Ok(spec.clone())
     }
 
-    async fn find_specification_by_id(&self, id: &str) -> Result<Option<ProjectSpecification>, McpError> {
+    async fn find_specification_by_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<ProjectSpecification>, McpError> {
         let db = self.db.lock().unwrap();
 
         let mut stmt = db.prepare(
@@ -429,17 +533,24 @@ impl SpecificationRepository for SqliteSpecificationRepository {
             "#
         ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-        let mut spec_iter = stmt.query_map([id], Self::row_to_specification)
+        let mut spec_iter = stmt
+            .query_map([id], Self::row_to_specification)
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         match spec_iter.next() {
             Some(Ok(spec)) => Ok(Some(spec)),
-            Some(Err(e)) => Err(McpError::internal_error(format!("Database error: {}", e), None)),
+            Some(Err(e)) => Err(McpError::internal_error(
+                format!("Database error: {}", e),
+                None,
+            )),
             None => Ok(None),
         }
     }
 
-    async fn find_specifications_by_project(&self, project_id: &str) -> Result<Vec<ProjectSpecification>, McpError> {
+    async fn find_specifications_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectSpecification>, McpError> {
         let db = self.db.lock().unwrap();
         let mut specifications = Vec::new();
 
@@ -451,7 +562,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
             "#
         ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-        let spec_rows = stmt.query_map([project_id], Self::row_to_specification)
+        let spec_rows = stmt
+            .query_map([project_id], Self::row_to_specification)
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         for spec in spec_rows {
@@ -464,7 +576,11 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         Ok(specifications)
     }
 
-    async fn find_specifications_by_type(&self, project_id: &str, spec_type: &str) -> Result<Vec<ProjectSpecification>, McpError> {
+    async fn find_specifications_by_type(
+        &self,
+        project_id: &str,
+        spec_type: &str,
+    ) -> Result<Vec<ProjectSpecification>, McpError> {
         let db = self.db.lock().unwrap();
         let mut specifications = Vec::new();
 
@@ -476,7 +592,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
             "#
         ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-        let spec_rows = stmt.query_map([project_id, spec_type], Self::row_to_specification)
+        let spec_rows = stmt
+            .query_map([project_id, spec_type], Self::row_to_specification)
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         for spec in spec_rows {
@@ -489,17 +606,27 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         Ok(specifications)
     }
 
-    async fn update_specification(&self, spec: &ProjectSpecification) -> Result<ProjectSpecification, McpError> {
+    async fn update_specification(
+        &self,
+        spec: &ProjectSpecification,
+    ) -> Result<ProjectSpecification, McpError> {
         let db = self.db.lock().unwrap();
 
-        let parsed_sections_json = serde_json::to_string(&spec.content.parsed_sections)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize parsed sections: {}", e), None))?;
+        let parsed_sections_json =
+            serde_json::to_string(&spec.content.parsed_sections).map_err(|e| {
+                McpError::internal_error(
+                    format!("Failed to serialize parsed sections: {}", e),
+                    None,
+                )
+            })?;
 
-        let content_metadata_json = serde_json::to_string(&spec.content.metadata)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize content metadata: {}", e), None))?;
+        let content_metadata_json = serde_json::to_string(&spec.content.metadata).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize content metadata: {}", e), None)
+        })?;
 
-        let spec_metadata_json = serde_json::to_string(&spec.metadata)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize spec metadata: {}", e), None))?;
+        let spec_metadata_json = serde_json::to_string(&spec.metadata).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize spec metadata: {}", e), None)
+        })?;
 
         db.execute(
             r#"
@@ -523,7 +650,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                 spec_metadata_json,
                 &spec.id,
             ],
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+        )
+        .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(spec.clone())
     }
@@ -531,7 +659,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn delete_specification(&self, id: &str) -> Result<bool, McpError> {
         let db = self.db.lock().unwrap();
 
-        let rows_affected = db.execute("DELETE FROM specifications WHERE id = ?", [id])
+        let rows_affected = db
+            .execute("DELETE FROM specifications WHERE id = ?", [id])
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(rows_affected > 0)
@@ -540,8 +669,12 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn create_requirement(&self, requirement: &Requirement) -> Result<Requirement, McpError> {
         let db = self.db.lock().unwrap();
 
-        let metadata_json = serde_json::to_string(&requirement.metadata)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize requirement metadata: {}", e), None))?;
+        let metadata_json = serde_json::to_string(&requirement.metadata).map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to serialize requirement metadata: {}", e),
+                None,
+            )
+        })?;
 
         db.execute(
             r#"
@@ -562,12 +695,14 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                 requirement.updated_at.to_rfc3339(),
                 metadata_json,
             ],
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+        )
+        .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         // Insert acceptance criteria
         for criterion in &requirement.acceptance_criteria {
-            let test_cases_json = serde_json::to_string(&criterion.test_cases)
-                .map_err(|e| McpError::internal_error(format!("Failed to serialize test cases: {}", e), None))?;
+            let test_cases_json = serde_json::to_string(&criterion.test_cases).map_err(|e| {
+                McpError::internal_error(format!("Failed to serialize test cases: {}", e), None)
+            })?;
 
             db.execute(
                 r#"
@@ -584,7 +719,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                     test_cases_json,
                     criterion.created_at.to_rfc3339(),
                 ],
-            ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+            )
+            .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
         }
 
         Ok(requirement.clone())
@@ -593,15 +729,18 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn find_requirement_by_id(&self, id: &str) -> Result<Option<Requirement>, McpError> {
         let db = self.db.lock().unwrap();
 
-        let mut stmt = db.prepare(
-            r#"
+        let mut stmt = db
+            .prepare(
+                r#"
             SELECT id, spec_id, title, description, user_story, priority, status,
                    created_at, updated_at, metadata
             FROM requirements WHERE id = ?
-            "#
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+            "#,
+            )
+            .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-        let mut req_iter = stmt.query_map([id], Self::row_to_requirement)
+        let mut req_iter = stmt
+            .query_map([id], Self::row_to_requirement)
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         match req_iter.next() {
@@ -611,22 +750,33 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                     "SELECT id, description, criterion_type, status, test_cases, created_at FROM acceptance_criteria WHERE requirement_id = ?"
                 ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-                let criteria_rows = criteria_stmt.query_map([&requirement.id], |row| {
-                    let test_cases: Vec<String> = row.get::<_, Option<String>>(4)?
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default();
+                let criteria_rows = criteria_stmt
+                    .query_map([&requirement.id], |row| {
+                        let test_cases: Vec<String> = row
+                            .get::<_, Option<String>>(4)?
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                            .unwrap_or_default();
 
-                    Ok(AcceptanceCriterion {
-                        id: row.get(0)?,
-                        description: row.get(1)?,
-                        criterion_type: CriterionType::Functional, // Simplified for now
-                        status: CriterionStatus::Pending, // Simplified for now
-                        test_cases,
-                        created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
-                            .map_err(|_| rusqlite::Error::InvalidColumnType(5, "created_at".to_string(), rusqlite::types::Type::Text))?
-                            .with_timezone(&Utc),
+                        Ok(AcceptanceCriterion {
+                            id: row.get(0)?,
+                            description: row.get(1)?,
+                            criterion_type: CriterionType::Functional, // Simplified for now
+                            status: CriterionStatus::Pending,          // Simplified for now
+                            test_cases,
+                            created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                                .map_err(|_| {
+                                    rusqlite::Error::InvalidColumnType(
+                                        5,
+                                        "created_at".to_string(),
+                                        rusqlite::types::Type::Text,
+                                    )
+                                })?
+                                .with_timezone(&Utc),
+                        })
                     })
-                }).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Database error: {}", e), None)
+                    })?;
 
                 for criterion in criteria_rows {
                     match criterion {
@@ -637,7 +787,10 @@ impl SpecificationRepository for SqliteSpecificationRepository {
 
                 Ok(Some(requirement))
             }
-            Some(Err(e)) => Err(McpError::internal_error(format!("Database error: {}", e), None)),
+            Some(Err(e)) => Err(McpError::internal_error(
+                format!("Database error: {}", e),
+                None,
+            )),
             None => Ok(None),
         }
     }
@@ -646,15 +799,18 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         let db = self.db.lock().unwrap();
         let mut requirements = Vec::new();
 
-        let mut stmt = db.prepare(
-            r#"
+        let mut stmt = db
+            .prepare(
+                r#"
             SELECT id, spec_id, title, description, user_story, priority, status,
                    created_at, updated_at, metadata
             FROM requirements WHERE spec_id = ? ORDER BY created_at ASC
-            "#
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+            "#,
+            )
+            .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-        let req_rows = stmt.query_map([spec_id], Self::row_to_requirement)
+        let req_rows = stmt
+            .query_map([spec_id], Self::row_to_requirement)
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         for req in req_rows {
@@ -670,8 +826,12 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn update_requirement(&self, requirement: &Requirement) -> Result<Requirement, McpError> {
         let db = self.db.lock().unwrap();
 
-        let metadata_json = serde_json::to_string(&requirement.metadata)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize requirement metadata: {}", e), None))?;
+        let metadata_json = serde_json::to_string(&requirement.metadata).map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to serialize requirement metadata: {}", e),
+                None,
+            )
+        })?;
 
         db.execute(
             r#"
@@ -690,7 +850,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                 metadata_json,
                 &requirement.id,
             ],
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+        )
+        .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(requirement.clone())
     }
@@ -698,7 +859,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn delete_requirement(&self, id: &str) -> Result<bool, McpError> {
         let db = self.db.lock().unwrap();
 
-        let rows_affected = db.execute("DELETE FROM requirements WHERE id = ?", [id])
+        let rows_affected = db
+            .execute("DELETE FROM requirements WHERE id = ?", [id])
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(rows_affected > 0)
@@ -707,8 +869,9 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn create_task(&self, task: &Task) -> Result<Task, McpError> {
         let db = self.db.lock().unwrap();
 
-        let metadata_json = serde_json::to_string(&task.metadata)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize task metadata: {}", e), None))?;
+        let metadata_json = serde_json::to_string(&task.metadata).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize task metadata: {}", e), None)
+        })?;
 
         db.execute(
             r#"
@@ -736,7 +899,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                 task.completed_at.map(|dt| dt.to_rfc3339()),
                 metadata_json,
             ],
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+        )
+        .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         // Insert task dependencies
         for dep_id in &task.dependencies {
@@ -752,28 +916,35 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn find_task_by_id(&self, id: &str) -> Result<Option<Task>, McpError> {
         let db = self.db.lock().unwrap();
 
-        let mut stmt = db.prepare(
-            r#"
+        let mut stmt = db
+            .prepare(
+                r#"
             SELECT id, spec_id, title, description, status, task_type, parent_task,
                    estimated_effort, actual_effort, assigned_to, progress,
                    created_at, updated_at, started_at, completed_at, metadata
             FROM tasks WHERE id = ?
-            "#
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+            "#,
+            )
+            .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-        let mut task_iter = stmt.query_map([id], Self::row_to_task)
+        let mut task_iter = stmt
+            .query_map([id], Self::row_to_task)
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         match task_iter.next() {
             Some(Ok(mut task)) => {
                 // Load dependencies
-                let mut dep_stmt = db.prepare(
-                    "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?"
-                ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+                let mut dep_stmt = db
+                    .prepare("SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?")
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Database error: {}", e), None)
+                    })?;
 
-                let dep_rows = dep_stmt.query_map([&task.id], |row| {
-                    Ok(row.get::<_, String>(0)?)
-                }).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+                let dep_rows = dep_stmt
+                    .query_map([&task.id], |row| Ok(row.get::<_, String>(0)?))
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Database error: {}", e), None)
+                    })?;
 
                 for dep in dep_rows {
                     match dep {
@@ -783,13 +954,17 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                 }
 
                 // Load subtasks
-                let mut subtask_stmt = db.prepare(
-                    "SELECT id FROM tasks WHERE parent_task = ?"
-                ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+                let mut subtask_stmt = db
+                    .prepare("SELECT id FROM tasks WHERE parent_task = ?")
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Database error: {}", e), None)
+                    })?;
 
-                let subtask_rows = subtask_stmt.query_map([&task.id], |row| {
-                    Ok(row.get::<_, String>(0)?)
-                }).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+                let subtask_rows = subtask_stmt
+                    .query_map([&task.id], |row| Ok(row.get::<_, String>(0)?))
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Database error: {}", e), None)
+                    })?;
 
                 for subtask in subtask_rows {
                     match subtask {
@@ -800,7 +975,10 @@ impl SpecificationRepository for SqliteSpecificationRepository {
 
                 Ok(Some(task))
             }
-            Some(Err(e)) => Err(McpError::internal_error(format!("Database error: {}", e), None)),
+            Some(Err(e)) => Err(McpError::internal_error(
+                format!("Database error: {}", e),
+                None,
+            )),
             None => Ok(None),
         }
     }
@@ -809,16 +987,19 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         let db = self.db.lock().unwrap();
         let mut tasks = Vec::new();
 
-        let mut stmt = db.prepare(
-            r#"
+        let mut stmt = db
+            .prepare(
+                r#"
             SELECT id, spec_id, title, description, status, task_type, parent_task,
                    estimated_effort, actual_effort, assigned_to, progress,
                    created_at, updated_at, started_at, completed_at, metadata
             FROM tasks WHERE spec_id = ? ORDER BY created_at ASC
-            "#
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+            "#,
+            )
+            .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-        let task_rows = stmt.query_map([spec_id], Self::row_to_task)
+        let task_rows = stmt
+            .query_map([spec_id], Self::row_to_task)
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         for task in task_rows {
@@ -831,20 +1012,27 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         Ok(tasks)
     }
 
-    async fn find_tasks_by_status(&self, spec_id: &str, status: &str) -> Result<Vec<Task>, McpError> {
+    async fn find_tasks_by_status(
+        &self,
+        spec_id: &str,
+        status: &str,
+    ) -> Result<Vec<Task>, McpError> {
         let db = self.db.lock().unwrap();
         let mut tasks = Vec::new();
 
-        let mut stmt = db.prepare(
-            r#"
+        let mut stmt = db
+            .prepare(
+                r#"
             SELECT id, spec_id, title, description, status, task_type, parent_task,
                    estimated_effort, actual_effort, assigned_to, progress,
                    created_at, updated_at, started_at, completed_at, metadata
             FROM tasks WHERE spec_id = ? AND status = ? ORDER BY created_at ASC
-            "#
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+            "#,
+            )
+            .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
-        let task_rows = stmt.query_map([spec_id, status], Self::row_to_task)
+        let task_rows = stmt
+            .query_map([spec_id, status], Self::row_to_task)
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         for task in task_rows {
@@ -860,8 +1048,9 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn update_task(&self, task: &Task) -> Result<Task, McpError> {
         let db = self.db.lock().unwrap();
 
-        let metadata_json = serde_json::to_string(&task.metadata)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize task metadata: {}", e), None))?;
+        let metadata_json = serde_json::to_string(&task.metadata).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize task metadata: {}", e), None)
+        })?;
 
         db.execute(
             r#"
@@ -887,7 +1076,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
                 metadata_json,
                 &task.id,
             ],
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+        )
+        .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(task.clone())
     }
@@ -895,13 +1085,18 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     async fn delete_task(&self, id: &str) -> Result<bool, McpError> {
         let db = self.db.lock().unwrap();
 
-        let rows_affected = db.execute("DELETE FROM tasks WHERE id = ?", [id])
+        let rows_affected = db
+            .execute("DELETE FROM tasks WHERE id = ?", [id])
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(rows_affected > 0)
     }
 
-    async fn link_requirement_to_context(&self, requirement_id: &str, context_id: &str) -> Result<(), McpError> {
+    async fn link_requirement_to_context(
+        &self,
+        requirement_id: &str,
+        context_id: &str,
+    ) -> Result<(), McpError> {
         let db = self.db.lock().unwrap();
 
         db.execute(
@@ -923,7 +1118,11 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         Ok(())
     }
 
-    async fn link_task_to_requirement(&self, task_id: &str, requirement_id: &str) -> Result<(), McpError> {
+    async fn link_task_to_requirement(
+        &self,
+        task_id: &str,
+        requirement_id: &str,
+    ) -> Result<(), McpError> {
         let db = self.db.lock().unwrap();
 
         db.execute(
@@ -934,35 +1133,50 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         Ok(())
     }
 
-    async fn unlink_requirement_from_context(&self, requirement_id: &str, context_id: &str) -> Result<(), McpError> {
+    async fn unlink_requirement_from_context(
+        &self,
+        requirement_id: &str,
+        context_id: &str,
+    ) -> Result<(), McpError> {
         let db = self.db.lock().unwrap();
 
         db.execute(
             "DELETE FROM requirement_context_links WHERE requirement_id = ? AND context_id = ?",
             params![requirement_id, context_id],
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+        )
+        .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(())
     }
 
-    async fn unlink_task_from_context(&self, task_id: &str, context_id: &str) -> Result<(), McpError> {
+    async fn unlink_task_from_context(
+        &self,
+        task_id: &str,
+        context_id: &str,
+    ) -> Result<(), McpError> {
         let db = self.db.lock().unwrap();
 
         db.execute(
             "DELETE FROM task_context_links WHERE task_id = ? AND context_id = ?",
             params![task_id, context_id],
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+        )
+        .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(())
     }
 
-    async fn unlink_task_from_requirement(&self, task_id: &str, requirement_id: &str) -> Result<(), McpError> {
+    async fn unlink_task_from_requirement(
+        &self,
+        task_id: &str,
+        requirement_id: &str,
+    ) -> Result<(), McpError> {
         let db = self.db.lock().unwrap();
 
         db.execute(
             "DELETE FROM task_requirement_links WHERE task_id = ? AND requirement_id = ?",
             params![task_id, requirement_id],
-        ).map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
+        )
+        .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
 
         Ok(())
     }

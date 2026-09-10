@@ -77,7 +77,7 @@ impl ChangeBroadcaster {
     /// Create a new change broadcaster
     pub fn new() -> Self {
         let (change_sender, _) = broadcast::channel(1000);
-        
+
         Self {
             change_sender,
             subscriptions: Arc::new(DashMap::new()),
@@ -90,55 +90,70 @@ impl ChangeBroadcaster {
     /// Start the change broadcaster with background processing
     pub async fn start(&self) -> Result<()> {
         info!("Starting change broadcaster");
-        
+
         // Start queue processing task
         self.start_queue_processing().await;
-        
+
         // Start metrics collection task
         self.start_metrics_collection().await;
-        
+
         Ok(())
     }
 
     /// Subscribe a client to changes with filters
     pub async fn subscribe(&self, client_id: ClientId, filters: Vec<SyncFilters>) -> Result<()> {
-        debug!("Client {} subscribing with {} filters", client_id, filters.len());
-        
+        debug!(
+            "Client {} subscribing with {} filters",
+            client_id,
+            filters.len()
+        );
+
         self.subscriptions.insert(client_id, filters);
-        
+
         // Initialize change queue for this client
         self.change_queue.insert(client_id, Vec::new());
-        
+
         Ok(())
     }
 
     /// Unsubscribe a client from changes
     pub async fn unsubscribe(&self, client_id: ClientId) -> Result<()> {
         debug!("Client {} unsubscribing", client_id);
-        
+
         self.subscriptions.remove(&client_id);
         self.change_queue.remove(&client_id);
-        
+
         Ok(())
     }
 
     /// Update client subscription filters
-    pub async fn update_subscription(&self, client_id: ClientId, filters: Vec<SyncFilters>) -> Result<()> {
-        debug!("Updating subscription for client {} with {} filters", client_id, filters.len());
-        
+    pub async fn update_subscription(
+        &self,
+        client_id: ClientId,
+        filters: Vec<SyncFilters>,
+    ) -> Result<()> {
+        debug!(
+            "Updating subscription for client {} with {} filters",
+            client_id,
+            filters.len()
+        );
+
         if let Some(mut subscription) = self.subscriptions.get_mut(&client_id) {
             *subscription = filters;
         } else {
             return Err(anyhow!("Client {} not found in subscriptions", client_id));
         }
-        
+
         Ok(())
     }
 
     /// Broadcast a change event to all subscribed clients
     pub async fn broadcast_change(&self, event: ChangeEvent) -> Result<()> {
-        debug!("Broadcasting change for entity {}/{}", event.entity_type, event.entity_id);
-        
+        debug!(
+            "Broadcasting change for entity {}/{}",
+            event.entity_type, event.entity_id
+        );
+
         // Calculate delta if this is an update
         let delta = if event.change_type == ChangeType::Update {
             self.calculate_delta(&event).await?
@@ -170,31 +185,42 @@ impl ChangeBroadcaster {
 
         // Find matching clients
         let matching_clients = self.find_matching_clients(&context_change).await;
-        
+
         if matching_clients.is_empty() {
-            debug!("No clients match filters for change {}", context_change.change_id);
+            debug!(
+                "No clients match filters for change {}",
+                context_change.change_id
+            );
             return Ok(());
         }
 
         // Try to broadcast immediately
         let immediate_success = self.try_immediate_broadcast(&context_change).await;
-        
+
         // Queue for clients that couldn't receive immediately
         if !immediate_success {
-            self.queue_change(&context_change, &matching_clients).await?;
+            self.queue_change(&context_change, &matching_clients)
+                .await?;
         }
 
         // Update metrics
-        self.metrics.total_changes_broadcast.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.total_clients_notified.fetch_add(matching_clients.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .total_changes_broadcast
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.total_clients_notified.fetch_add(
+            matching_clients.len() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         Ok(())
     }
 
     /// Calculate delta between old and new values
     pub async fn calculate_delta(&self, event: &ChangeEvent) -> Result<Option<Value>> {
-        self.metrics.delta_calculations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        
+        self.metrics
+            .delta_calculations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         let old_value = match &event.old_value {
             Some(val) => val,
             None => return Ok(None),
@@ -218,7 +244,7 @@ impl ChangeBroadcaster {
     /// Find changed fields between two JSON values
     fn find_changed_fields(&self, old: &Value, new: &Value) -> Vec<String> {
         let mut changed_fields = Vec::new();
-        
+
         match (old, new) {
             (Value::Object(old_obj), Value::Object(new_obj)) => {
                 // Check for changed or new fields
@@ -231,7 +257,7 @@ impl ChangeBroadcaster {
                         changed_fields.push(key.clone());
                     }
                 }
-                
+
                 // Check for removed fields
                 for key in old_obj.keys() {
                     if !new_obj.contains_key(key) {
@@ -244,26 +270,26 @@ impl ChangeBroadcaster {
                 changed_fields.push("value".to_string());
             }
         }
-        
+
         changed_fields
     }
 
     /// Find clients that match the change filters
     pub async fn find_matching_clients(&self, change: &ContextChange) -> Vec<ClientId> {
         let mut matching_clients = Vec::new();
-        
+
         for subscription in self.subscriptions.iter() {
             let client_id = *subscription.key();
             let filters = subscription.value();
-            
+
             // Check if any filter matches
             let matches = filters.iter().any(|filter| filter.matches(change));
-            
+
             if matches {
                 matching_clients.push(client_id);
             }
         }
-        
+
         matching_clients
     }
 
@@ -271,18 +297,28 @@ impl ChangeBroadcaster {
     async fn try_immediate_broadcast(&self, change: &ContextChange) -> bool {
         match self.change_sender.send(change.clone()) {
             Ok(receiver_count) => {
-                debug!("Immediately broadcast change {} to {} receivers", change.change_id, receiver_count);
+                debug!(
+                    "Immediately broadcast change {} to {} receivers",
+                    change.change_id, receiver_count
+                );
                 true
             }
             Err(_) => {
-                warn!("Failed to immediately broadcast change {}", change.change_id);
+                warn!(
+                    "Failed to immediately broadcast change {}",
+                    change.change_id
+                );
                 false
             }
         }
     }
 
     /// Queue change for reliable delivery
-    pub async fn queue_change(&self, change: &ContextChange, target_clients: &[ClientId]) -> Result<()> {
+    pub async fn queue_change(
+        &self,
+        change: &ContextChange,
+        target_clients: &[ClientId],
+    ) -> Result<()> {
         let queued_change = QueuedChange {
             change_id: change.change_id,
             change: change.clone(),
@@ -294,18 +330,24 @@ impl ChangeBroadcaster {
         for &client_id in target_clients {
             if let Some(mut queue) = self.change_queue.get_mut(&client_id) {
                 queue.push(queued_change.clone());
-                self.metrics.queue_size.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.metrics
+                    .queue_size
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
-        debug!("Queued change {} for {} clients", change.change_id, target_clients.len());
+        debug!(
+            "Queued change {} for {} clients",
+            change.change_id,
+            target_clients.len()
+        );
         Ok(())
     }
 
     /// Update change history for delta calculation
     async fn update_change_history(&self, change: &ContextChange) {
         let history_key = format!("{}:{}", change.entity_type, change.entity_id);
-        
+
         let versioned_change = VersionedChange {
             version: change.metadata.version,
             change: change.clone(),
@@ -315,7 +357,7 @@ impl ChangeBroadcaster {
         if let Some(mut history) = self.change_history.get_mut(&history_key) {
             history.versions.push(versioned_change);
             history.last_updated = Utc::now();
-            
+
             // Keep only last 10 versions to prevent memory bloat
             if history.versions.len() > 10 {
                 history.versions.remove(0);
@@ -335,7 +377,7 @@ impl ChangeBroadcaster {
     async fn get_next_version(&self, entity_id: &str) -> u32 {
         // Simple version increment - in production, use database sequence
         let _history_key = format!("*:{}", entity_id); // Wildcard for entity type
-        
+
         let mut max_version = 0;
         for history in self.change_history.iter() {
             if history.key().ends_with(&format!(":{}", entity_id)) {
@@ -344,7 +386,7 @@ impl ChangeBroadcaster {
                 }
             }
         }
-        
+
         max_version + 1
     }
 
@@ -355,7 +397,8 @@ impl ChangeBroadcaster {
 
     /// Get queued changes for a client
     pub async fn get_queued_changes(&self, client_id: ClientId) -> Vec<QueuedChange> {
-        self.change_queue.get(&client_id)
+        self.change_queue
+            .get(&client_id)
             .map(|queue| queue.clone())
             .unwrap_or_default()
     }
@@ -365,13 +408,15 @@ impl ChangeBroadcaster {
         if let Some(mut queue) = self.change_queue.get_mut(&client_id) {
             let initial_len = queue.len();
             queue.retain(|queued| queued.change_id != change_id);
-            
+
             if queue.len() < initial_len {
-                self.metrics.queue_size.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                self.metrics
+                    .queue_size
+                    .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 debug!("Acknowledged change {} for client {}", change_id, client_id);
             }
         }
-        
+
         Ok(())
     }
 
@@ -379,19 +424,29 @@ impl ChangeBroadcaster {
     pub fn get_metrics(&self) -> BroadcastMetrics {
         BroadcastMetrics {
             total_changes_broadcast: std::sync::atomic::AtomicU64::new(
-                self.metrics.total_changes_broadcast.load(std::sync::atomic::Ordering::Relaxed)
+                self.metrics
+                    .total_changes_broadcast
+                    .load(std::sync::atomic::Ordering::Relaxed),
             ),
             total_clients_notified: std::sync::atomic::AtomicU64::new(
-                self.metrics.total_clients_notified.load(std::sync::atomic::Ordering::Relaxed)
+                self.metrics
+                    .total_clients_notified
+                    .load(std::sync::atomic::Ordering::Relaxed),
             ),
             failed_deliveries: std::sync::atomic::AtomicU64::new(
-                self.metrics.failed_deliveries.load(std::sync::atomic::Ordering::Relaxed)
+                self.metrics
+                    .failed_deliveries
+                    .load(std::sync::atomic::Ordering::Relaxed),
             ),
             delta_calculations: std::sync::atomic::AtomicU64::new(
-                self.metrics.delta_calculations.load(std::sync::atomic::Ordering::Relaxed)
+                self.metrics
+                    .delta_calculations
+                    .load(std::sync::atomic::Ordering::Relaxed),
             ),
             queue_size: std::sync::atomic::AtomicU64::new(
-                self.metrics.queue_size.load(std::sync::atomic::Ordering::Relaxed)
+                self.metrics
+                    .queue_size
+                    .load(std::sync::atomic::Ordering::Relaxed),
             ),
         }
     }
@@ -419,18 +474,26 @@ impl ChangeBroadcaster {
                         match change_sender.send(queued_change.change.clone()) {
                             Ok(_) => {
                                 to_remove.push(index);
-                                debug!("Successfully resent queued change {} to client {}", 
-                                      queued_change.change_id, client_id);
+                                debug!(
+                                    "Successfully resent queued change {} to client {}",
+                                    queued_change.change_id, client_id
+                                );
                             }
                             Err(_) => {
                                 queued_change.retry_count += 1;
-                                
+
                                 // Remove changes that have been retried too many times
                                 if queued_change.retry_count > 5 {
                                     to_remove.push(index);
-                                    metrics.failed_deliveries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    warn!("Dropping change {} for client {} after {} retries", 
-                                          queued_change.change_id, client_id, queued_change.retry_count);
+                                    metrics
+                                        .failed_deliveries
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    warn!(
+                                        "Dropping change {} for client {} after {} retries",
+                                        queued_change.change_id,
+                                        client_id,
+                                        queued_change.retry_count
+                                    );
                                 }
                             }
                         }
@@ -439,7 +502,9 @@ impl ChangeBroadcaster {
                     // Remove successfully sent or expired changes
                     for &index in to_remove.iter().rev() {
                         queue.remove(index);
-                        metrics.queue_size.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        metrics
+                            .queue_size
+                            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             }

@@ -2,7 +2,7 @@
 mod tests {
     use super::*;
     use crate::container::AppContainer;
-    use crate::services::{AnalyticsHelper, AnalyticsEventType};
+    use crate::services::{AnalyticsEventType, AnalyticsHelper};
     use tempfile::tempdir;
     use tokio_test;
 
@@ -21,7 +21,10 @@ mod tests {
             Some("test_project".to_string()),
             Some("authentication".to_string()),
             Some("implement".to_string()),
-            Some(vec!["user_service".to_string(), "auth_controller".to_string()]),
+            Some(vec![
+                "user_service".to_string(),
+                "auth_controller".to_string(),
+            ]),
             Some(150),
             true,
             None,
@@ -29,11 +32,22 @@ mod tests {
 
         // Track the event
         let result = container.analytics_service.track_event(event).await;
-        assert!(result.is_ok(), "Failed to track analytics event: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to track analytics event: {:?}",
+            result
+        );
 
         // Test getting project insights
-        let insights_result = container.analytics_service.get_project_insights("test_project").await;
-        assert!(insights_result.is_ok(), "Failed to get project insights: {:?}", insights_result);
+        let insights_result = container
+            .analytics_service
+            .get_project_insights("test_project")
+            .await;
+        assert!(
+            insights_result.is_ok(),
+            "Failed to get project insights: {:?}",
+            insights_result
+        );
 
         let insights = insights_result.unwrap();
         assert_eq!(insights.project_id, "test_project");
@@ -42,7 +56,11 @@ mod tests {
 
         // Test getting global statistics
         let global_stats_result = container.analytics_service.get_global_statistics().await;
-        assert!(global_stats_result.is_ok(), "Failed to get global statistics: {:?}", global_stats_result);
+        assert!(
+            global_stats_result.is_ok(),
+            "Failed to get global statistics: {:?}",
+            global_stats_result
+        );
 
         let global_stats = global_stats_result.unwrap();
         assert!(global_stats.contains_key("total_events"));
@@ -62,7 +80,10 @@ mod tests {
             None,
         );
 
-        assert!(matches!(query_event.event_type, AnalyticsEventType::ContextQuery));
+        assert!(matches!(
+            query_event.event_type,
+            AnalyticsEventType::ContextQuery
+        ));
         assert_eq!(query_event.project_id, Some("project1".to_string()));
         assert_eq!(query_event.duration_ms, Some(200));
         assert!(query_event.success);
@@ -77,7 +98,10 @@ mod tests {
             None,
         );
 
-        assert!(matches!(create_event.event_type, AnalyticsEventType::EntityCreate));
+        assert!(matches!(
+            create_event.event_type,
+            AnalyticsEventType::EntityCreate
+        ));
         assert_eq!(create_event.entity_type, Some("business_rule".to_string()));
         assert_eq!(create_event.entity_id, Some("rule123".to_string()));
 
@@ -92,8 +116,14 @@ mod tests {
             None,
         );
 
-        assert!(matches!(bulk_event.event_type, AnalyticsEventType::BulkOperation));
+        assert!(matches!(
+            bulk_event.event_type,
+            AnalyticsEventType::BulkOperation
+        ));
         assert_eq!(bulk_event.metadata.get("count").unwrap().as_u64(), Some(5));
-        assert_eq!(bulk_event.metadata.get("operation").unwrap().as_str(), Some("bulk_create"));
+        assert_eq!(
+            bulk_event.metadata.get("operation").unwrap().as_str(),
+            Some("bulk_create")
+        );
     }
 }

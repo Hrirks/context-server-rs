@@ -555,7 +555,7 @@ impl Task {
 
     pub fn update_status(&mut self, status: TaskStatus) {
         let now = Utc::now();
-        
+
         match (&self.status, &status) {
             (TaskStatus::NotStarted, TaskStatus::InProgress) => {
                 self.started_at = Some(now);
@@ -566,7 +566,7 @@ impl Task {
             }
             _ => {}
         }
-        
+
         self.status = status;
         self.updated_at = now;
     }
@@ -574,7 +574,7 @@ impl Task {
     pub fn update_progress(&mut self, progress: f64) {
         self.progress = progress.clamp(0.0, 1.0);
         self.updated_at = Utc::now();
-        
+
         // Auto-update status based on progress
         if self.progress == 1.0 && self.status != TaskStatus::Completed {
             self.update_status(TaskStatus::Completed);
@@ -736,12 +736,21 @@ mod tests {
 
     #[test]
     fn test_spec_type_from_filename() {
-        assert_eq!(SpecType::from_filename("requirements.md"), SpecType::Requirements);
+        assert_eq!(
+            SpecType::from_filename("requirements.md"),
+            SpecType::Requirements
+        );
         assert_eq!(SpecType::from_filename("design.md"), SpecType::Design);
         assert_eq!(SpecType::from_filename("tasks.md"), SpecType::Tasks);
         assert_eq!(SpecType::from_filename("api-spec.md"), SpecType::API);
-        assert_eq!(SpecType::from_filename("architecture-doc.md"), SpecType::Architecture);
-        assert_eq!(SpecType::from_filename("unknown.md"), SpecType::Custom("unknown.md".to_string()));
+        assert_eq!(
+            SpecType::from_filename("architecture-doc.md"),
+            SpecType::Architecture
+        );
+        assert_eq!(
+            SpecType::from_filename("unknown.md"),
+            SpecType::Custom("unknown.md".to_string())
+        );
     }
 
     #[test]
@@ -750,7 +759,10 @@ mod tests {
         assert_eq!(SpecFormat::from_extension("yaml"), SpecFormat::YAML);
         assert_eq!(SpecFormat::from_extension("json"), SpecFormat::JSON);
         assert_eq!(SpecFormat::from_extension("txt"), SpecFormat::PlainText);
-        assert_eq!(SpecFormat::from_extension("unknown"), SpecFormat::Custom("unknown".to_string()));
+        assert_eq!(
+            SpecFormat::from_extension("unknown"),
+            SpecFormat::Custom("unknown".to_string())
+        );
     }
 
     #[test]
@@ -776,7 +788,8 @@ mod tests {
             "spec-1".to_string(),
             "User Authentication".to_string(),
             "Users should be able to authenticate".to_string(),
-        ).with_user_story("As a user, I want to login so that I can access the system".to_string());
+        )
+        .with_user_story("As a user, I want to login so that I can access the system".to_string());
 
         assert!(requirement.user_story.is_some());
         assert_eq!(
@@ -874,10 +887,22 @@ mod tests {
 
     #[test]
     fn test_task_status_from_checkbox_status() {
-        assert_eq!(TaskStatus::from_checkbox_status("[ ]"), TaskStatus::NotStarted);
-        assert_eq!(TaskStatus::from_checkbox_status("[x]"), TaskStatus::Completed);
-        assert_eq!(TaskStatus::from_checkbox_status("[-]"), TaskStatus::InProgress);
-        assert_eq!(TaskStatus::from_checkbox_status("unknown"), TaskStatus::NotStarted);
+        assert_eq!(
+            TaskStatus::from_checkbox_status("[ ]"),
+            TaskStatus::NotStarted
+        );
+        assert_eq!(
+            TaskStatus::from_checkbox_status("[x]"),
+            TaskStatus::Completed
+        );
+        assert_eq!(
+            TaskStatus::from_checkbox_status("[-]"),
+            TaskStatus::InProgress
+        );
+        assert_eq!(
+            TaskStatus::from_checkbox_status("unknown"),
+            TaskStatus::NotStarted
+        );
     }
 
     #[test]
@@ -939,19 +964,26 @@ mod tests {
         let content = SpecContent::new(
             SpecFormat::Markdown,
             "# Test\n\n## Overview\n\nThis is the overview".to_string(),
-        ).with_sections(sections);
+        )
+        .with_sections(sections);
 
         assert_eq!(content.parsed_sections.len(), 2);
-        assert_eq!(content.parsed_sections.get("overview").unwrap(), "This is the overview");
-        assert_eq!(content.parsed_sections.get("details").unwrap(), "These are the details");
+        assert_eq!(
+            content.parsed_sections.get("overview").unwrap(),
+            "This is the overview"
+        );
+        assert_eq!(
+            content.parsed_sections.get("details").unwrap(),
+            "These are the details"
+        );
     }
 
     #[test]
     fn test_spec_content_with_metadata() {
-        let content = SpecContent::new(
-            SpecFormat::Markdown,
-            "# Test".to_string(),
-        ).with_metadata("author".to_string(), serde_json::Value::String("John Doe".to_string()));
+        let content = SpecContent::new(SpecFormat::Markdown, "# Test".to_string()).with_metadata(
+            "author".to_string(),
+            serde_json::Value::String("John Doe".to_string()),
+        );
 
         assert_eq!(content.metadata.len(), 1);
         assert_eq!(

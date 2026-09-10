@@ -541,7 +541,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                     .await;
 
                 let duration_ms = start_time.elapsed().as_millis() as u64;
-                
+
                 match query_result {
                     Ok(result) => {
                         // Track successful query
@@ -554,8 +554,13 @@ impl ServerHandler for EnhancedContextMcpServer {
                             true,
                             None,
                         );
-                        
-                        if let Err(e) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(e) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", e);
                         }
 
@@ -575,8 +580,13 @@ impl ServerHandler for EnhancedContextMcpServer {
                             false,
                             Some(e.to_string()),
                         );
-                        
-                        if let Err(analytics_err) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(analytics_err) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", analytics_err);
                         }
 
@@ -614,8 +624,13 @@ impl ServerHandler for EnhancedContextMcpServer {
                             true,
                             None,
                         );
-                        
-                        if let Err(e) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(e) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", e);
                         }
 
@@ -633,12 +648,20 @@ impl ServerHandler for EnhancedContextMcpServer {
                             false,
                             Some(e.to_string()),
                         );
-                        
-                        if let Err(analytics_err) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(analytics_err) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", analytics_err);
                         }
 
-                        Err(McpError::internal_error(format!("Validation failed: {e}"), None))
+                        Err(McpError::internal_error(
+                            format!("Validation failed: {e}"),
+                            None,
+                        ))
                     }
                 }
             }
@@ -1151,7 +1174,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 }
 
                 let duration_ms = start_time.elapsed().as_millis() as u64;
-                
+
                 // Track successful bulk operation
                 let analytics_event = AnalyticsHelper::create_bulk_operation_event(
                     Some(project_id.to_string()),
@@ -1162,8 +1185,13 @@ impl ServerHandler for EnhancedContextMcpServer {
                     true,
                     None,
                 );
-                
-                if let Err(e) = self.container.analytics_service.track_event(analytics_event).await {
+
+                if let Err(e) = self
+                    .container
+                    .analytics_service
+                    .track_event(analytics_event)
+                    .await
+                {
                     tracing::warn!("Failed to track analytics event: {}", e);
                 }
 
@@ -1391,22 +1419,53 @@ impl ServerHandler for EnhancedContextMcpServer {
 
                 let analytics_result = match scope {
                     "global" => {
-                        self.container.analytics_service.get_global_statistics().await
+                        self.container
+                            .analytics_service
+                            .get_global_statistics()
+                            .await
                     }
                     "entity" => {
-                        let entity_type = args.get("entity_type").and_then(|v| v.as_str()).ok_or_else(|| {
-                            McpError::invalid_params("Missing required parameter: entity_type for entity scope", None)
-                        })?;
-                        let entity_id = args.get("entity_id").and_then(|v| v.as_str()).ok_or_else(|| {
-                            McpError::invalid_params("Missing required parameter: entity_id for entity scope", None)
-                        })?;
-                        
-                        match self.container.analytics_service.get_entity_usage(entity_type, entity_id).await {
-                            Ok(usage_stats) => Ok(serde_json::to_value(usage_stats).unwrap_or_default().as_object().unwrap().clone().into_iter().collect()),
+                        let entity_type = args
+                            .get("entity_type")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                McpError::invalid_params(
+                                    "Missing required parameter: entity_type for entity scope",
+                                    None,
+                                )
+                            })?;
+                        let entity_id =
+                            args.get("entity_id")
+                                .and_then(|v| v.as_str())
+                                .ok_or_else(|| {
+                                    McpError::invalid_params(
+                                        "Missing required parameter: entity_id for entity scope",
+                                        None,
+                                    )
+                                })?;
+
+                        match self
+                            .container
+                            .analytics_service
+                            .get_entity_usage(entity_type, entity_id)
+                            .await
+                        {
+                            Ok(usage_stats) => Ok(serde_json::to_value(usage_stats)
+                                .unwrap_or_default()
+                                .as_object()
+                                .unwrap()
+                                .clone()
+                                .into_iter()
+                                .collect()),
                             Err(e) => Err(e),
                         }
                     }
-                    _ => return Err(McpError::invalid_params("Invalid scope. Must be 'global' or 'entity'", None)),
+                    _ => {
+                        return Err(McpError::invalid_params(
+                            "Invalid scope. Must be 'global' or 'entity'",
+                            None,
+                        ))
+                    }
                 };
 
                 let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -1421,8 +1480,13 @@ impl ServerHandler for EnhancedContextMcpServer {
                             true,
                             None,
                         );
-                        
-                        if let Err(e) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(e) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", e);
                         }
 
@@ -1440,12 +1504,20 @@ impl ServerHandler for EnhancedContextMcpServer {
                             false,
                             Some(e.to_string()),
                         );
-                        
-                        if let Err(analytics_err) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(analytics_err) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", analytics_err);
                         }
 
-                        Err(McpError::internal_error(format!("Analytics query failed: {e}"), None))
+                        Err(McpError::internal_error(
+                            format!("Analytics query failed: {e}"),
+                            None,
+                        ))
                     }
                 }
             }
@@ -1453,11 +1525,18 @@ impl ServerHandler for EnhancedContextMcpServer {
             "get_context_insights" => {
                 let start_time = Instant::now();
                 let args = request.arguments.unwrap_or_default();
-                let project_id = args.get("project_id").and_then(|v| v.as_str()).ok_or_else(|| {
-                    McpError::invalid_params("Missing required parameter: project_id", None)
-                })?;
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
 
-                let insights_result = self.container.analytics_service.get_project_insights(project_id).await;
+                let insights_result = self
+                    .container
+                    .analytics_service
+                    .get_project_insights(project_id)
+                    .await;
                 let duration_ms = start_time.elapsed().as_millis() as u64;
 
                 match insights_result {
@@ -1470,8 +1549,13 @@ impl ServerHandler for EnhancedContextMcpServer {
                             true,
                             None,
                         );
-                        
-                        if let Err(e) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(e) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", e);
                         }
 
@@ -1489,12 +1573,20 @@ impl ServerHandler for EnhancedContextMcpServer {
                             false,
                             Some(e.to_string()),
                         );
-                        
-                        if let Err(analytics_err) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(analytics_err) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", analytics_err);
                         }
 
-                        Err(McpError::internal_error(format!("Context insights query failed: {e}"), None))
+                        Err(McpError::internal_error(
+                            format!("Context insights query failed: {e}"),
+                            None,
+                        ))
                     }
                 }
             }
@@ -1502,31 +1594,56 @@ impl ServerHandler for EnhancedContextMcpServer {
             "generate_quality_report" => {
                 let start_time = Instant::now();
                 let args = request.arguments.unwrap_or_default();
-                let start_date_str = args.get("start_date").and_then(|v| v.as_str()).ok_or_else(|| {
-                    McpError::invalid_params("Missing required parameter: start_date", None)
-                })?;
-                let end_date_str = args.get("end_date").and_then(|v| v.as_str()).ok_or_else(|| {
-                    McpError::invalid_params("Missing required parameter: end_date", None)
-                })?;
+                let start_date_str =
+                    args.get("start_date")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: start_date", None)
+                        })?;
+                let end_date_str =
+                    args.get("end_date")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: end_date", None)
+                        })?;
 
                 // Parse dates
                 let start_date = chrono::DateTime::parse_from_rfc3339(start_date_str)
-                    .map_err(|_| McpError::invalid_params("Invalid start_date format. Use ISO 8601 format", None))?
+                    .map_err(|_| {
+                        McpError::invalid_params(
+                            "Invalid start_date format. Use ISO 8601 format",
+                            None,
+                        )
+                    })?
                     .with_timezone(&chrono::Utc);
                 let end_date = chrono::DateTime::parse_from_rfc3339(end_date_str)
-                    .map_err(|_| McpError::invalid_params("Invalid end_date format. Use ISO 8601 format", None))?
+                    .map_err(|_| {
+                        McpError::invalid_params(
+                            "Invalid end_date format. Use ISO 8601 format",
+                            None,
+                        )
+                    })?
                     .with_timezone(&chrono::Utc);
 
                 let project_id = args.get("project_id").and_then(|v| v.as_str());
 
-                let report_result = self.container.analytics_service.generate_usage_report(start_date, end_date).await;
+                let report_result = self
+                    .container
+                    .analytics_service
+                    .generate_usage_report(start_date, end_date)
+                    .await;
                 let duration_ms = start_time.elapsed().as_millis() as u64;
 
                 match report_result {
                     Ok(mut report) => {
                         // Add quality assessment to the report
                         if let Some(pid) = project_id {
-                            if let Ok(insights) = self.container.analytics_service.get_project_insights(pid).await {
+                            if let Ok(insights) = self
+                                .container
+                                .analytics_service
+                                .get_project_insights(pid)
+                                .await
+                            {
                                 if let Some(report_obj) = report.as_object_mut() {
                                     report_obj.insert("quality_assessment".to_string(), serde_json::json!({
                                         "context_health_score": insights.context_health_score,
@@ -1545,8 +1662,13 @@ impl ServerHandler for EnhancedContextMcpServer {
                             true,
                             None,
                         );
-                        
-                        if let Err(e) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(e) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", e);
                         }
 
@@ -1564,12 +1686,20 @@ impl ServerHandler for EnhancedContextMcpServer {
                             false,
                             Some(e.to_string()),
                         );
-                        
-                        if let Err(analytics_err) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(analytics_err) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", analytics_err);
                         }
 
-                        Err(McpError::internal_error(format!("Quality report generation failed: {e}"), None))
+                        Err(McpError::internal_error(
+                            format!("Quality report generation failed: {e}"),
+                            None,
+                        ))
                     }
                 }
             }
@@ -1577,29 +1707,57 @@ impl ServerHandler for EnhancedContextMcpServer {
             "export_analytics_data" => {
                 let start_time = Instant::now();
                 let args = request.arguments.unwrap_or_default();
-                let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("json");
-                let start_date_str = args.get("start_date").and_then(|v| v.as_str()).ok_or_else(|| {
-                    McpError::invalid_params("Missing required parameter: start_date", None)
-                })?;
-                let end_date_str = args.get("end_date").and_then(|v| v.as_str()).ok_or_else(|| {
-                    McpError::invalid_params("Missing required parameter: end_date", None)
-                })?;
+                let format = args
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("json");
+                let start_date_str =
+                    args.get("start_date")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: start_date", None)
+                        })?;
+                let end_date_str =
+                    args.get("end_date")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: end_date", None)
+                        })?;
 
                 // Parse dates
                 let start_date = chrono::DateTime::parse_from_rfc3339(start_date_str)
-                    .map_err(|_| McpError::invalid_params("Invalid start_date format. Use ISO 8601 format", None))?
+                    .map_err(|_| {
+                        McpError::invalid_params(
+                            "Invalid start_date format. Use ISO 8601 format",
+                            None,
+                        )
+                    })?
                     .with_timezone(&chrono::Utc);
                 let end_date = chrono::DateTime::parse_from_rfc3339(end_date_str)
-                    .map_err(|_| McpError::invalid_params("Invalid end_date format. Use ISO 8601 format", None))?
+                    .map_err(|_| {
+                        McpError::invalid_params(
+                            "Invalid end_date format. Use ISO 8601 format",
+                            None,
+                        )
+                    })?
                     .with_timezone(&chrono::Utc);
 
                 let project_id = args.get("project_id").and_then(|v| v.as_str());
-                let event_types: Vec<String> = args.get("event_types")
+                let event_types: Vec<String> = args
+                    .get("event_types")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
                     .unwrap_or_default();
 
-                let export_result = self.container.analytics_service.generate_usage_report(start_date, end_date).await;
+                let export_result = self
+                    .container
+                    .analytics_service
+                    .generate_usage_report(start_date, end_date)
+                    .await;
                 let duration_ms = start_time.elapsed().as_millis() as u64;
 
                 match export_result {
@@ -1635,14 +1793,20 @@ impl ServerHandler for EnhancedContextMcpServer {
                             true,
                             None,
                         );
-                        
-                        if let Err(e) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(e) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", e);
                         }
 
-                        let content = serde_json::to_string_pretty(&final_content).map_err(|e| {
-                            McpError::internal_error(format!("Serialization error: {e}"), None)
-                        })?;
+                        let content =
+                            serde_json::to_string_pretty(&final_content).map_err(|e| {
+                                McpError::internal_error(format!("Serialization error: {e}"), None)
+                            })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))
                     }
                     Err(e) => {
@@ -1654,12 +1818,20 @@ impl ServerHandler for EnhancedContextMcpServer {
                             false,
                             Some(e.to_string()),
                         );
-                        
-                        if let Err(analytics_err) = self.container.analytics_service.track_event(analytics_event).await {
+
+                        if let Err(analytics_err) = self
+                            .container
+                            .analytics_service
+                            .track_event(analytics_event)
+                            .await
+                        {
                             tracing::warn!("Failed to track analytics event: {}", analytics_err);
                         }
 
-                        Err(McpError::internal_error(format!("Analytics data export failed: {e}"), None))
+                        Err(McpError::internal_error(
+                            format!("Analytics data export failed: {e}"),
+                            None,
+                        ))
                     }
                 }
             }
@@ -1870,11 +2042,16 @@ impl ServerHandler for EnhancedContextMcpServer {
                 };
 
                 let duration_ms = start_time.elapsed().as_millis() as u64;
-                
+
                 // Extract project_id and entity_id from result for analytics
-                let project_id = data.get("project_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let project_id = data
+                    .get("project_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 let entity_id = if let Ok(obj) = result.as_object().ok_or("Invalid result") {
-                    obj.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    obj.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
                 } else {
                     None
                 };
@@ -1888,8 +2065,13 @@ impl ServerHandler for EnhancedContextMcpServer {
                     true,
                     None,
                 );
-                
-                if let Err(e) = self.container.analytics_service.track_event(analytics_event).await {
+
+                if let Err(e) = self
+                    .container
+                    .analytics_service
+                    .track_event(analytics_event)
+                    .await
+                {
                     tracing::warn!("Failed to track analytics event: {}", e);
                 }
 
@@ -2589,49 +2771,70 @@ impl ServerHandler for EnhancedContextMcpServer {
                     .unwrap_or(".kiro/specs");
 
                 let path = std::path::Path::new(base_path);
-                match self.container.specification_import_service.scan_and_import_specifications(path).await {
+                match self
+                    .container
+                    .specification_import_service
+                    .scan_and_import_specifications(path)
+                    .await
+                {
                     Ok(specs) => {
                         let content = serde_json::to_string_pretty(&specs).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))
                     }
-                    Err(e) => Err(McpError::internal_error(format!("Failed to scan specifications: {e}"), None)),
+                    Err(e) => Err(McpError::internal_error(
+                        format!("Failed to scan specifications: {e}"),
+                        None,
+                    )),
                 }
             }
 
             "import_specification" => {
                 let args = request.arguments.unwrap_or_default();
-                let file_path = args
-                    .get("file_path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        McpError::invalid_params("Missing required parameter: file_path", None)
-                    })?;
+                let file_path =
+                    args.get("file_path")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: file_path", None)
+                        })?;
 
                 let path = std::path::Path::new(file_path);
-                match self.container.specification_import_service.import_specification_file(path).await {
+                match self
+                    .container
+                    .specification_import_service
+                    .import_specification_file(path)
+                    .await
+                {
                     Ok(spec) => {
                         let content = serde_json::to_string_pretty(&spec).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))
                     }
-                    Err(e) => Err(McpError::internal_error(format!("Failed to import specification: {e}"), None)),
+                    Err(e) => Err(McpError::internal_error(
+                        format!("Failed to import specification: {e}"),
+                        None,
+                    )),
                 }
             }
 
             "validate_specification" => {
                 let args = request.arguments.unwrap_or_default();
-                let file_path = args
-                    .get("file_path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        McpError::invalid_params("Missing required parameter: file_path", None)
-                    })?;
+                let file_path =
+                    args.get("file_path")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: file_path", None)
+                        })?;
 
                 let path = std::path::Path::new(file_path);
-                match self.container.specification_import_service.validate_specification_file(path).await {
+                match self
+                    .container
+                    .specification_import_service
+                    .validate_specification_file(path)
+                    .await
+                {
                     Ok(issues) => {
                         let result = serde_json::json!({
                             "file_path": file_path,
@@ -2643,7 +2846,10 @@ impl ServerHandler for EnhancedContextMcpServer {
                         })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))
                     }
-                    Err(e) => Err(McpError::internal_error(format!("Failed to validate specification: {e}"), None)),
+                    Err(e) => Err(McpError::internal_error(
+                        format!("Failed to validate specification: {e}"),
+                        None,
+                    )),
                 }
             }
 
@@ -2655,7 +2861,12 @@ impl ServerHandler for EnhancedContextMcpServer {
                     .unwrap_or(".kiro/specs");
 
                 let path = std::path::Path::new(base_path);
-                match self.container.specification_import_service.start_file_monitoring(path).await {
+                match self
+                    .container
+                    .specification_import_service
+                    .start_file_monitoring(path)
+                    .await
+                {
                     Ok(()) => {
                         let result = serde_json::json!({
                             "status": "success",
@@ -2667,7 +2878,10 @@ impl ServerHandler for EnhancedContextMcpServer {
                         })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))
                     }
-                    Err(e) => Err(McpError::internal_error(format!("Failed to start monitoring: {e}"), None)),
+                    Err(e) => Err(McpError::internal_error(
+                        format!("Failed to start monitoring: {e}"),
+                        None,
+                    )),
                 }
             }
 
@@ -2680,14 +2894,22 @@ impl ServerHandler for EnhancedContextMcpServer {
                         McpError::invalid_params("Missing required parameter: spec_id", None)
                     })?;
 
-                match self.container.specification_versioning_service.get_versions(spec_id).await {
+                match self
+                    .container
+                    .specification_versioning_service
+                    .get_versions(spec_id)
+                    .await
+                {
                     Ok(versions) => {
                         let content = serde_json::to_string_pretty(&versions).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))
                     }
-                    Err(e) => Err(McpError::internal_error(format!("Failed to get specification versions: {e}"), None)),
+                    Err(e) => Err(McpError::internal_error(
+                        format!("Failed to get specification versions: {e}"),
+                        None,
+                    )),
                 }
             }
 
@@ -2706,23 +2928,38 @@ impl ServerHandler for EnhancedContextMcpServer {
                         McpError::invalid_params("Missing required parameter: version2_id", None)
                     })?;
 
-                match self.container.specification_versioning_service.compare_versions(version1_id, version2_id).await {
+                match self
+                    .container
+                    .specification_versioning_service
+                    .compare_versions(version1_id, version2_id)
+                    .await
+                {
                     Ok(comparison) => {
                         let content = serde_json::to_string_pretty(&comparison).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))
                     }
-                    Err(e) => Err(McpError::internal_error(format!("Failed to compare specification versions: {e}"), None)),
+                    Err(e) => Err(McpError::internal_error(
+                        format!("Failed to compare specification versions: {e}"),
+                        None,
+                    )),
                 }
             }
 
             // Specification Analytics Tools
-            "track_requirements_progress" | "track_tasks_progress" | "analyze_specification_completeness" | 
-            "calculate_development_velocity" | "generate_specification_health_report" => {
-                let analytics_tools = SpecificationAnalyticsTools::new(self.container.specification_analytics_service.clone());
+            "track_requirements_progress"
+            | "track_tasks_progress"
+            | "analyze_specification_completeness"
+            | "calculate_development_velocity"
+            | "generate_specification_health_report" => {
+                let analytics_tools = SpecificationAnalyticsTools::new(
+                    self.container.specification_analytics_service.clone(),
+                );
                 let arguments = request.arguments.unwrap_or_default();
-                analytics_tools.handle_tool_call(&request.name, serde_json::Value::Object(arguments)).await
+                analytics_tools
+                    .handle_tool_call(&request.name, serde_json::Value::Object(arguments))
+                    .await
             }
 
             // Fallback for undefined tools

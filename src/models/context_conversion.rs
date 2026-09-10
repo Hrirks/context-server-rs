@@ -25,7 +25,7 @@ impl ContextConverter {
 
         let mut item = EnhancedContextItem::new(rule.project_id, content);
         item.id = rule.id;
-        
+
         // Parse created_at if available
         if let Some(created_at_str) = rule.created_at {
             if let Ok(created_at) = DateTime::parse_from_rfc3339(&created_at_str) {
@@ -84,7 +84,9 @@ impl ContextConverter {
             };
         }
 
-        item.metadata.tags.push("architectural_decision".to_string());
+        item.metadata
+            .tags
+            .push("architectural_decision".to_string());
         item.semantic_tags.push(SemanticTag::new(
             "architecture".to_string(),
             0.95,
@@ -98,8 +100,14 @@ impl ContextConverter {
     pub fn from_performance_requirement(req: PerformanceRequirement) -> EnhancedContextItem {
         let content = ContextContent {
             content_type: ContextType::PerformanceRequirement,
-            title: format!("Performance: {}", req.component_area.as_deref().unwrap_or("General")),
-            description: format!("Performance requirement for {}", req.component_area.as_deref().unwrap_or("system")),
+            title: format!(
+                "Performance: {}",
+                req.component_area.as_deref().unwrap_or("General")
+            ),
+            description: format!(
+                "Performance requirement for {}",
+                req.component_area.as_deref().unwrap_or("system")
+            ),
             data: json!({
                 "component_area": req.component_area,
                 "requirement_type": req.requirement_type,
@@ -125,7 +133,7 @@ impl ContextConverter {
         // Set high priority for performance requirements
         item.metadata.priority = Priority::High;
         item.metadata.tags.push("performance".to_string());
-        
+
         if let Some(component) = &req.component_area {
             item.semantic_tags.push(SemanticTag::new(
                 format!("component:{}", component),
@@ -168,7 +176,7 @@ impl ContextConverter {
         // Security policies are critical
         item.metadata.priority = Priority::Critical;
         item.metadata.tags.push("security".to_string());
-        
+
         if let Some(area) = &policy.policy_area {
             item.semantic_tags.push(SemanticTag::new(
                 format!("security:{}", area),
@@ -184,7 +192,10 @@ impl ContextConverter {
     pub fn from_project_convention(convention: ProjectConvention) -> EnhancedContextItem {
         let content = ContextContent {
             content_type: ContextType::ProjectConvention,
-            title: format!("Convention: {}", convention.convention_type.as_deref().unwrap_or("General")),
+            title: format!(
+                "Convention: {}",
+                convention.convention_type.as_deref().unwrap_or("General")
+            ),
             description: convention.convention_rule.clone().unwrap_or_default(),
             data: json!({
                 "convention_type": convention.convention_type,
@@ -209,7 +220,7 @@ impl ContextConverter {
         }
 
         item.metadata.tags.push("convention".to_string());
-        
+
         if let Some(conv_type) = &convention.convention_type {
             item.semantic_tags.push(SemanticTag::new(
                 format!("convention:{}", conv_type),
@@ -271,10 +282,22 @@ impl ContextConverter {
             project_id: item.project_id.clone(),
             rule_name: item.content.title.clone(),
             description: Some(item.content.description.clone()),
-            domain_area: data.get("domain_area").and_then(|v| v.as_str()).map(String::from),
-            implementation_pattern: data.get("implementation_pattern").and_then(|v| v.as_str()).map(String::from),
-            constraints: data.get("constraints").and_then(|v| v.as_str()).map(String::from),
-            examples: data.get("examples").and_then(|v| v.as_str()).map(String::from),
+            domain_area: data
+                .get("domain_area")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            implementation_pattern: data
+                .get("implementation_pattern")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            constraints: data
+                .get("constraints")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            examples: data
+                .get("examples")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             created_at: Some(item.created_at.to_rfc3339()),
         })
     }
@@ -291,16 +314,30 @@ impl ContextConverter {
             project_id: item.project_id.clone(),
             decision_title: item.content.title.clone(),
             context: Some(item.content.description.clone()),
-            decision: data.get("decision").and_then(|v| v.as_str()).map(String::from),
-            consequences: data.get("consequences").and_then(|v| v.as_str()).map(String::from),
-            alternatives_considered: data.get("alternatives_considered").and_then(|v| v.as_str()).map(String::from),
-            status: data.get("status").and_then(|v| v.as_str()).map(String::from),
+            decision: data
+                .get("decision")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            consequences: data
+                .get("consequences")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            alternatives_considered: data
+                .get("alternatives_considered")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            status: data
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             created_at: Some(item.created_at.to_rfc3339()),
         })
     }
 
     /// Convert an EnhancedContextItem back to a PerformanceRequirement (if applicable)
-    pub fn to_performance_requirement(item: &EnhancedContextItem) -> Option<PerformanceRequirement> {
+    pub fn to_performance_requirement(
+        item: &EnhancedContextItem,
+    ) -> Option<PerformanceRequirement> {
         if item.content.content_type != ContextType::PerformanceRequirement {
             return None;
         }
@@ -309,11 +346,26 @@ impl ContextConverter {
         Some(PerformanceRequirement {
             id: item.id.clone(),
             project_id: item.project_id.clone(),
-            component_area: data.get("component_area").and_then(|v| v.as_str()).map(String::from),
-            requirement_type: data.get("requirement_type").and_then(|v| v.as_str()).map(String::from),
-            target_value: data.get("target_value").and_then(|v| v.as_str()).map(String::from),
-            optimization_patterns: data.get("optimization_patterns").and_then(|v| v.as_str()).map(String::from),
-            avoid_patterns: data.get("avoid_patterns").and_then(|v| v.as_str()).map(String::from),
+            component_area: data
+                .get("component_area")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            requirement_type: data
+                .get("requirement_type")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            target_value: data
+                .get("target_value")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            optimization_patterns: data
+                .get("optimization_patterns")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            avoid_patterns: data
+                .get("avoid_patterns")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             created_at: Some(item.created_at.to_rfc3339()),
         })
     }
@@ -329,11 +381,23 @@ impl ContextConverter {
             id: item.id.clone(),
             project_id: item.project_id.clone(),
             policy_name: item.content.title.clone(),
-            policy_area: data.get("policy_area").and_then(|v| v.as_str()).map(String::from),
+            policy_area: data
+                .get("policy_area")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             requirements: Some(item.content.description.clone()),
-            implementation_pattern: data.get("implementation_pattern").and_then(|v| v.as_str()).map(String::from),
-            forbidden_patterns: data.get("forbidden_patterns").and_then(|v| v.as_str()).map(String::from),
-            compliance_notes: data.get("compliance_notes").and_then(|v| v.as_str()).map(String::from),
+            implementation_pattern: data
+                .get("implementation_pattern")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            forbidden_patterns: data
+                .get("forbidden_patterns")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            compliance_notes: data
+                .get("compliance_notes")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             created_at: Some(item.created_at.to_rfc3339()),
         })
     }
@@ -348,11 +412,23 @@ impl ContextConverter {
         Some(ProjectConvention {
             id: item.id.clone(),
             project_id: item.project_id.clone(),
-            convention_type: data.get("convention_type").and_then(|v| v.as_str()).map(String::from),
+            convention_type: data
+                .get("convention_type")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             convention_rule: Some(item.content.description.clone()),
-            good_examples: data.get("good_examples").and_then(|v| v.as_str()).map(String::from),
-            bad_examples: data.get("bad_examples").and_then(|v| v.as_str()).map(String::from),
-            rationale: data.get("rationale").and_then(|v| v.as_str()).map(String::from),
+            good_examples: data
+                .get("good_examples")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            bad_examples: data
+                .get("bad_examples")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            rationale: data
+                .get("rationale")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             created_at: Some(item.created_at.to_rfc3339()),
         })
     }
@@ -369,10 +445,22 @@ impl ContextConverter {
             project_id: item.project_id.clone(),
             feature_name: item.content.title.clone(),
             business_purpose: Some(item.content.description.clone()),
-            user_personas: data.get("user_personas").and_then(|v| v.as_str()).map(String::from),
-            key_workflows: data.get("key_workflows").and_then(|v| v.as_str()).map(String::from),
-            integration_points: data.get("integration_points").and_then(|v| v.as_str()).map(String::from),
-            edge_cases: data.get("edge_cases").and_then(|v| v.as_str()).map(String::from),
+            user_personas: data
+                .get("user_personas")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            key_workflows: data
+                .get("key_workflows")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            integration_points: data
+                .get("integration_points")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            edge_cases: data
+                .get("edge_cases")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             created_at: Some(item.created_at.to_rfc3339()),
         })
     }
@@ -423,7 +511,10 @@ mod tests {
         };
 
         let enhanced = ContextConverter::from_architectural_decision(decision.clone());
-        assert_eq!(enhanced.content.content_type, ContextType::ArchitecturalDecision);
+        assert_eq!(
+            enhanced.content.content_type,
+            ContextType::ArchitecturalDecision
+        );
         assert_eq!(enhanced.metadata.priority, Priority::High);
 
         let converted_back = ContextConverter::to_architectural_decision(&enhanced).unwrap();

@@ -25,13 +25,9 @@ pub enum WebSocketMessage {
         message: String,
     },
     /// Subscribe to specific context changes
-    Subscribe {
-        filters: SyncFilters,
-    },
+    Subscribe { filters: SyncFilters },
     /// Unsubscribe from context changes
-    Unsubscribe {
-        filters: SyncFilters,
-    },
+    Unsubscribe { filters: SyncFilters },
     /// Context change notification
     ContextChange {
         message_id: MessageId,
@@ -39,17 +35,11 @@ pub enum WebSocketMessage {
         timestamp: DateTime<Utc>,
     },
     /// Acknowledgment of received message
-    Ack {
-        message_id: MessageId,
-    },
+    Ack { message_id: MessageId },
     /// Heartbeat/ping message
-    Ping {
-        timestamp: DateTime<Utc>,
-    },
+    Ping { timestamp: DateTime<Utc> },
     /// Heartbeat/pong response
-    Pong {
-        timestamp: DateTime<Utc>,
-    },
+    Pong { timestamp: DateTime<Utc> },
     /// Error message
     Error {
         code: String,

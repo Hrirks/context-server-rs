@@ -1,10 +1,10 @@
-use crate::models::enhanced_context::{EnhancedContextItem, ContextType, ContextId, ProjectId};
+use crate::models::enhanced_context::{ContextId, ContextType, EnhancedContextItem, ProjectId};
 use crate::repositories::EnhancedContextRepository;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rmcp::model::ErrorData as McpError;
 use rusqlite::{params, Connection, Row};
 use std::sync::{Arc, Mutex};
-use chrono::{DateTime, Utc};
 
 /// SQLite implementation of EnhancedContextRepository
 pub struct SqliteEnhancedContextRepository {
@@ -15,14 +15,17 @@ impl SqliteEnhancedContextRepository {
     pub fn new(db: Arc<Mutex<Connection>>) -> Self {
         Self { db }
     }
-    
+
     fn db_error(msg: &str, e: impl std::fmt::Display) -> McpError {
         McpError::internal_error(format!("{}: {}", msg, e), None)
     }
 
     /// Initialize the enhanced context tables
     pub fn initialize_tables(&self) -> Result<(), McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
         // Create enhanced_context_items table
         db.execute(
@@ -52,7 +55,8 @@ impl SqliteEnhancedContextRepository {
             )
             "#,
             [],
-        ).map_err(|e| Self::db_error("Failed to create enhanced_context_items table", e))?;
+        )
+        .map_err(|e| Self::db_error("Failed to create enhanced_context_items table", e))?;
 
         // Create indexes for better performance
         db.execute("CREATE INDEX IF NOT EXISTS idx_enhanced_context_project ON enhanced_context_items (project_id)", []).ok();
@@ -61,9 +65,12 @@ impl SqliteEnhancedContextRepository {
         Ok(())
     }
 
-    fn row_to_enhanced_context_item(&self, row: &Row) -> Result<EnhancedContextItem, rusqlite::Error> {
+    fn row_to_enhanced_context_item(
+        &self,
+        row: &Row,
+    ) -> Result<EnhancedContextItem, rusqlite::Error> {
         use crate::models::enhanced_context::*;
-        
+
         let id: String = row.get("id")?;
         let project_id: String = row.get("project_id")?;
         let content_type_str: String = row.get("content_type")?;
@@ -76,7 +83,7 @@ impl SqliteEnhancedContextRepository {
         let created_at_str: String = row.get("created_at")?;
         let updated_at_str: String = row.get("updated_at")?;
         let version: u32 = row.get("version")?;
-        
+
         // Parse metadata fields
         let tags_str: Option<String> = row.get("tags")?;
         let priority_str: String = row.get("priority")?;
@@ -108,10 +115,22 @@ impl SqliteEnhancedContextRepository {
 
         // Parse dates
         let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-            .map_err(|_| rusqlite::Error::InvalidColumnType(0, "created_at".to_string(), rusqlite::types::Type::Text))?
+            .map_err(|_| {
+                rusqlite::Error::InvalidColumnType(
+                    0,
+                    "created_at".to_string(),
+                    rusqlite::types::Type::Text,
+                )
+            })?
             .with_timezone(&Utc);
         let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
-            .map_err(|_| rusqlite::Error::InvalidColumnType(0, "updated_at".to_string(), rusqlite::types::Type::Text))?
+            .map_err(|_| {
+                rusqlite::Error::InvalidColumnType(
+                    0,
+                    "updated_at".to_string(),
+                    rusqlite::types::Type::Text,
+                )
+            })?
             .with_timezone(&Utc);
 
         // Parse tags
@@ -190,7 +209,7 @@ impl SqliteEnhancedContextRepository {
             relationships: Vec::new(), // Will be loaded separately if needed
             quality_score,
             usage_stats: UsageStatistics::default(), // Will be loaded separately if needed
-            semantic_tags: Vec::new(), // Will be loaded separately if needed
+            semantic_tags: Vec::new(),               // Will be loaded separately if needed
             created_at,
             updated_at,
             version,
@@ -200,12 +219,19 @@ impl SqliteEnhancedContextRepository {
 
 #[async_trait]
 impl EnhancedContextRepository for SqliteEnhancedContextRepository {
-    async fn create_context(&self, context: &EnhancedContextItem) -> Result<EnhancedContextItem, McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+    async fn create_context(
+        &self,
+        context: &EnhancedContextItem,
+    ) -> Result<EnhancedContextItem, McpError> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
         let data_json = serde_json::to_string(&context.content.data).unwrap_or_default();
         let tags_json = serde_json::to_string(&context.metadata.tags).unwrap_or_default();
-        let custom_fields_json = serde_json::to_string(&context.metadata.custom_fields).unwrap_or_default();
+        let custom_fields_json =
+            serde_json::to_string(&context.metadata.custom_fields).unwrap_or_default();
 
         db.execute(
             r#"
@@ -243,33 +269,46 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
     }
 
     async fn find_context_by_id(&self, id: &str) -> Result<Option<EnhancedContextItem>, McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
-        let mut stmt = db.prepare(
-            "SELECT * FROM enhanced_context_items WHERE id = ?1"
-        ).map_err(|e| Self::db_error("Failed to prepare statement", e))?;
+        let mut stmt = db
+            .prepare("SELECT * FROM enhanced_context_items WHERE id = ?1")
+            .map_err(|e| Self::db_error("Failed to prepare statement", e))?;
 
-        let context_iter = stmt.query_map(params![id], |row| {
-            self.row_to_enhanced_context_item(row)
-        }).map_err(|e| Self::db_error("Failed to query context", e))?;
+        let mut context_iter = stmt
+            .query_map(params![id], |row| self.row_to_enhanced_context_item(row))
+            .map_err(|e| Self::db_error("Failed to query context", e))?;
 
-        for context in context_iter {
-            return Ok(Some(context.map_err(|e| Self::db_error("Failed to parse context", e))?));
+        if let Some(context) = context_iter.next() {
+            return Ok(Some(
+                context.map_err(|e| Self::db_error("Failed to parse context", e))?,
+            ));
         }
 
         Ok(None)
     }
 
-    async fn find_contexts_by_project(&self, project_id: &str) -> Result<Vec<EnhancedContextItem>, McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+    async fn find_contexts_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<EnhancedContextItem>, McpError> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
         let mut stmt = db.prepare(
             "SELECT * FROM enhanced_context_items WHERE project_id = ?1 ORDER BY updated_at DESC"
         ).map_err(|e| Self::db_error("Failed to prepare statement", e))?;
 
-        let context_iter = stmt.query_map(params![project_id], |row| {
-            self.row_to_enhanced_context_item(row)
-        }).map_err(|e| Self::db_error("Failed to query contexts", e))?;
+        let context_iter = stmt
+            .query_map(params![project_id], |row| {
+                self.row_to_enhanced_context_item(row)
+            })
+            .map_err(|e| Self::db_error("Failed to query contexts", e))?;
 
         let mut contexts = Vec::new();
         for context in context_iter {
@@ -279,16 +318,25 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
         Ok(contexts)
     }
 
-    async fn find_contexts_by_type(&self, project_id: &str, context_type: ContextType) -> Result<Vec<EnhancedContextItem>, McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+    async fn find_contexts_by_type(
+        &self,
+        project_id: &str,
+        context_type: ContextType,
+    ) -> Result<Vec<EnhancedContextItem>, McpError> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
         let mut stmt = db.prepare(
             "SELECT * FROM enhanced_context_items WHERE project_id = ?1 AND content_type = ?2 ORDER BY updated_at DESC"
         ).map_err(|e| Self::db_error("Failed to prepare statement", e))?;
 
-        let context_iter = stmt.query_map(params![project_id, context_type.as_str()], |row| {
-            self.row_to_enhanced_context_item(row)
-        }).map_err(|e| Self::db_error("Failed to query contexts", e))?;
+        let context_iter = stmt
+            .query_map(params![project_id, context_type.as_str()], |row| {
+                self.row_to_enhanced_context_item(row)
+            })
+            .map_err(|e| Self::db_error("Failed to query contexts", e))?;
 
         let mut contexts = Vec::new();
         for context in context_iter {
@@ -298,15 +346,23 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
         Ok(contexts)
     }
 
-    async fn find_contexts_by_keywords(&self, project_id: &str, keywords: &[String]) -> Result<Vec<EnhancedContextItem>, McpError> {
+    async fn find_contexts_by_keywords(
+        &self,
+        project_id: &str,
+        keywords: &[String],
+    ) -> Result<Vec<EnhancedContextItem>, McpError> {
         if keywords.is_empty() {
             return self.find_contexts_by_project(project_id).await;
         }
 
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
         // Build a simple keyword search query
-        let keyword_conditions: Vec<String> = keywords.iter()
+        let keyword_conditions: Vec<String> = keywords
+            .iter()
             .map(|_| "(title LIKE ? OR description LIKE ?)".to_string())
             .collect();
         let where_clause = keyword_conditions.join(" OR ");
@@ -316,7 +372,9 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
             where_clause
         );
 
-        let mut stmt = db.prepare(&query).map_err(|e| Self::db_error("Failed to prepare statement", e))?;
+        let mut stmt = db
+            .prepare(&query)
+            .map_err(|e| Self::db_error("Failed to prepare statement", e))?;
 
         // Build parameters
         let mut params = vec![project_id.to_string()];
@@ -326,13 +384,14 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
             params.push(pattern);
         }
 
-        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter()
-            .map(|p| p as &dyn rusqlite::ToSql)
-            .collect();
+        let param_refs: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
 
-        let context_iter = stmt.query_map(&param_refs[..], |row| {
-            self.row_to_enhanced_context_item(row)
-        }).map_err(|e| Self::db_error("Failed to query contexts", e))?;
+        let context_iter = stmt
+            .query_map(&param_refs[..], |row| {
+                self.row_to_enhanced_context_item(row)
+            })
+            .map_err(|e| Self::db_error("Failed to query contexts", e))?;
 
         let mut contexts = Vec::new();
         for context in context_iter {
@@ -342,12 +401,19 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
         Ok(contexts)
     }
 
-    async fn update_context(&self, context: &EnhancedContextItem) -> Result<EnhancedContextItem, McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+    async fn update_context(
+        &self,
+        context: &EnhancedContextItem,
+    ) -> Result<EnhancedContextItem, McpError> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
         let data_json = serde_json::to_string(&context.content.data).unwrap_or_default();
         let tags_json = serde_json::to_string(&context.metadata.tags).unwrap_or_default();
-        let custom_fields_json = serde_json::to_string(&context.metadata.custom_fields).unwrap_or_default();
+        let custom_fields_json =
+            serde_json::to_string(&context.metadata.custom_fields).unwrap_or_default();
 
         db.execute(
             r#"
@@ -385,44 +451,65 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
     }
 
     async fn delete_context(&self, id: &str) -> Result<bool, McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
-        let rows_affected = db.execute(
-            "DELETE FROM enhanced_context_items WHERE id = ?1",
-            params![id],
-        ).map_err(|e| Self::db_error("Failed to delete enhanced context item", e))?;
+        let rows_affected = db
+            .execute(
+                "DELETE FROM enhanced_context_items WHERE id = ?1",
+                params![id],
+            )
+            .map_err(|e| Self::db_error("Failed to delete enhanced context item", e))?;
 
         Ok(rows_affected > 0)
     }
 
-    async fn find_contexts_linked_to_requirement(&self, _requirement_id: &str) -> Result<Vec<EnhancedContextItem>, McpError> {
+    async fn find_contexts_linked_to_requirement(
+        &self,
+        _requirement_id: &str,
+    ) -> Result<Vec<EnhancedContextItem>, McpError> {
         // Simplified implementation - in a full implementation, you'd have a linking table
         Ok(Vec::new())
     }
 
-    async fn find_contexts_linked_to_task(&self, _task_id: &str) -> Result<Vec<EnhancedContextItem>, McpError> {
+    async fn find_contexts_linked_to_task(
+        &self,
+        _task_id: &str,
+    ) -> Result<Vec<EnhancedContextItem>, McpError> {
         // Simplified implementation - in a full implementation, you'd have a linking table
         Ok(Vec::new())
     }
 
-    async fn find_related_contexts(&self, _context_id: &str) -> Result<Vec<EnhancedContextItem>, McpError> {
+    async fn find_related_contexts(
+        &self,
+        _context_id: &str,
+    ) -> Result<Vec<EnhancedContextItem>, McpError> {
         // Simplified implementation - in a full implementation, you'd have a relationships table
         Ok(Vec::new())
     }
 
     async fn update_quality_score(&self, context_id: &str, score: f64) -> Result<(), McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
         db.execute(
             "UPDATE enhanced_context_items SET quality_score = ?1, updated_at = ?2 WHERE id = ?3",
             params![score, Utc::now().to_rfc3339(), context_id],
-        ).map_err(|e| Self::db_error("Failed to update quality score", e))?;
+        )
+        .map_err(|e| Self::db_error("Failed to update quality score", e))?;
 
         Ok(())
     }
 
     async fn record_context_usage(&self, context_id: &str) -> Result<(), McpError> {
-        let db = self.db.lock().map_err(|e| Self::db_error("Database lock error", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| Self::db_error("Database lock error", e))?;
 
         let now = Utc::now().to_rfc3339();
 
@@ -435,7 +522,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
             WHERE id = ?2
             "#,
             params![now, context_id],
-        ).map_err(|e| Self::db_error("Failed to update context access", e))?;
+        )
+        .map_err(|e| Self::db_error("Failed to update context access", e))?;
 
         Ok(())
     }

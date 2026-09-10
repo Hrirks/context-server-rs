@@ -1,8 +1,10 @@
-use crate::services::analytics_service::{AnalyticsEvent, AnalyticsEventType, AnalyticsRepository, UsageStatistics};
+use crate::services::analytics_service::{
+    AnalyticsEvent, AnalyticsEventType, AnalyticsRepository, UsageStatistics,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, Row, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -20,7 +22,7 @@ impl SqliteAnalyticsRepository {
     /// Initialize the analytics tables
     pub fn init_tables(&self) -> Result<()> {
         let conn = self.db.lock().unwrap();
-        
+
         // Create analytics_events table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS analytics_events (
@@ -44,12 +46,12 @@ impl SqliteAnalyticsRepository {
             "CREATE INDEX IF NOT EXISTS idx_analytics_events_project_id ON analytics_events(project_id)",
             [],
         )?;
-        
+
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_analytics_events_entity ON analytics_events(entity_type, entity_id)",
             [],
         )?;
-        
+
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_analytics_events_timestamp ON analytics_events(timestamp)",
             [],
@@ -80,7 +82,13 @@ impl SqliteAnalyticsRepository {
 
         let timestamp_str: String = row.get("timestamp")?;
         let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
-            .map_err(|_| rusqlite::Error::InvalidColumnType(0, "timestamp".to_string(), rusqlite::types::Type::Text))?
+            .map_err(|_| {
+                rusqlite::Error::InvalidColumnType(
+                    0,
+                    "timestamp".to_string(),
+                    rusqlite::types::Type::Text,
+                )
+            })?
             .with_timezone(&Utc);
 
         Ok(AnalyticsEvent {
@@ -103,7 +111,7 @@ impl SqliteAnalyticsRepository {
 impl AnalyticsRepository for SqliteAnalyticsRepository {
     async fn store_event(&self, event: AnalyticsEvent) -> Result<()> {
         let conn = self.db.lock().unwrap();
-        
+
         let event_type_str = match event.event_type {
             AnalyticsEventType::ContextQuery => "ContextQuery",
             AnalyticsEventType::EntityCreate => "EntityCreate",
@@ -140,9 +148,13 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
         Ok(())
     }
 
-    async fn get_entity_usage(&self, entity_type: &str, entity_id: &str) -> Result<UsageStatistics> {
+    async fn get_entity_usage(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<UsageStatistics> {
         let conn = self.db.lock().unwrap();
-        
+
         // Get total queries
         let total_queries: u64 = conn.query_row(
             "SELECT COUNT(*) FROM analytics_events WHERE entity_type = ?1 AND entity_id = ?2",
@@ -185,9 +197,9 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
         let mut stmt = conn.prepare(
             "SELECT event_type, COUNT(*) as count FROM analytics_events 
              WHERE entity_type = ?1 AND entity_id = ?2 
-             GROUP BY event_type ORDER BY count DESC LIMIT 5"
+             GROUP BY event_type ORDER BY count DESC LIMIT 5",
         )?;
-        
+
         let operation_rows = stmt.query_map(params![entity_type, entity_id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
         })?;
@@ -210,36 +222,38 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
 
     async fn get_project_events(&self, project_id: &str) -> Result<Vec<AnalyticsEvent>> {
         let conn = self.db.lock().unwrap();
-        
+
         let mut stmt = conn.prepare(
             "SELECT id, event_type, project_id, entity_type, entity_id, 
                     user_agent, metadata, timestamp, duration_ms, success, error_message
-             FROM analytics_events WHERE project_id = ?1 ORDER BY timestamp DESC"
+             FROM analytics_events WHERE project_id = ?1 ORDER BY timestamp DESC",
         )?;
-        
+
         let event_rows = stmt.query_map(params![project_id], Self::row_to_analytics_event)?;
-        
+
         let mut events = Vec::new();
         for event_result in event_rows {
             events.push(event_result?);
         }
-        
+
         Ok(events)
     }
 
     async fn get_global_statistics(&self) -> Result<HashMap<String, serde_json::Value>> {
         let conn = self.db.lock().unwrap();
-        
+
         let mut stats = HashMap::new();
-        
+
         // Total events
-        let total_events: u64 = conn.query_row(
-            "SELECT COUNT(*) FROM analytics_events",
-            [],
-            |row| row.get(0),
-        )?;
-        stats.insert("total_events".to_string(), serde_json::Value::Number(total_events.into()));
-        
+        let total_events: u64 =
+            conn.query_row("SELECT COUNT(*) FROM analytics_events", [], |row| {
+                row.get(0)
+            })?;
+        stats.insert(
+            "total_events".to_string(),
+            serde_json::Value::Number(total_events.into()),
+        );
+
         // Success rate
         let successful_events: u64 = conn.query_row(
             "SELECT COUNT(*) FROM analytics_events WHERE success = 1",
@@ -251,72 +265,92 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
         } else {
             0.0
         };
-        stats.insert("success_rate".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(success_rate).unwrap_or(serde_json::Number::from(0))));
-        
+        stats.insert(
+            "success_rate".to_string(),
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(success_rate).unwrap_or(serde_json::Number::from(0)),
+            ),
+        );
+
         // Average response time
-        let avg_response_time: Option<f64> = conn.query_row(
-            "SELECT AVG(duration_ms) FROM analytics_events WHERE duration_ms IS NOT NULL",
-            [],
-            |row| row.get(0),
-        ).optional()?;
-        stats.insert("average_response_time_ms".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(avg_response_time.unwrap_or(0.0)).unwrap_or(serde_json::Number::from(0))));
-        
+        let avg_response_time: Option<f64> = conn
+            .query_row(
+                "SELECT AVG(duration_ms) FROM analytics_events WHERE duration_ms IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        stats.insert(
+            "average_response_time_ms".to_string(),
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(avg_response_time.unwrap_or(0.0))
+                    .unwrap_or(serde_json::Number::from(0)),
+            ),
+        );
+
         // Event type distribution
         let mut stmt = conn.prepare(
             "SELECT event_type, COUNT(*) as count FROM analytics_events GROUP BY event_type ORDER BY count DESC"
         )?;
-        
+
         let event_type_rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
         })?;
-        
+
         let mut event_type_distribution = HashMap::new();
         for row in event_type_rows {
             let (event_type, count) = row?;
             event_type_distribution.insert(event_type, serde_json::Value::Number(count.into()));
         }
-        stats.insert("event_type_distribution".to_string(), serde_json::Value::Object(event_type_distribution.into_iter().collect()));
-        
+        stats.insert(
+            "event_type_distribution".to_string(),
+            serde_json::Value::Object(event_type_distribution.into_iter().collect()),
+        );
+
         Ok(stats)
     }
 
-    async fn generate_usage_report(&self, start_date: DateTime<Utc>, end_date: DateTime<Utc>) -> Result<serde_json::Value> {
+    async fn generate_usage_report(
+        &self,
+        start_date: DateTime<Utc>,
+        end_date: DateTime<Utc>,
+    ) -> Result<serde_json::Value> {
         let conn = self.db.lock().unwrap();
-        
+
         let start_str = start_date.to_rfc3339();
         let end_str = end_date.to_rfc3339();
-        
+
         // Events in time range
         let events_in_range: u64 = conn.query_row(
             "SELECT COUNT(*) FROM analytics_events WHERE timestamp >= ?1 AND timestamp <= ?2",
             params![start_str, end_str],
             |row| row.get(0),
         )?;
-        
+
         // Success rate in time range
         let successful_events_in_range: u64 = conn.query_row(
             "SELECT COUNT(*) FROM analytics_events WHERE timestamp >= ?1 AND timestamp <= ?2 AND success = 1",
             params![start_str, end_str],
             |row| row.get(0),
         )?;
-        
+
         let success_rate = if events_in_range > 0 {
             successful_events_in_range as f64 / events_in_range as f64
         } else {
             0.0
         };
-        
+
         // Most active projects
         let mut stmt = conn.prepare(
             "SELECT project_id, COUNT(*) as count FROM analytics_events 
              WHERE timestamp >= ?1 AND timestamp <= ?2 AND project_id IS NOT NULL
-             GROUP BY project_id ORDER BY count DESC LIMIT 10"
+             GROUP BY project_id ORDER BY count DESC LIMIT 10",
         )?;
-        
+
         let project_rows = stmt.query_map(params![start_str, end_str], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
         })?;
-        
+
         let mut most_active_projects = Vec::new();
         for row in project_rows {
             let (project_id, count) = row?;
@@ -325,7 +359,7 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
                 "event_count": count
             }));
         }
-        
+
         Ok(serde_json::json!({
             "report_period": {
                 "start": start_str,

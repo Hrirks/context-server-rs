@@ -48,8 +48,18 @@ impl ContextEmbedding {
             .map(|(a, b)| a * b)
             .sum();
 
-        let norm_a: f32 = self.embedding_vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = other.embedding_vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_a: f32 = self
+            .embedding_vector
+            .iter()
+            .map(|x| x * x)
+            .sum::<f32>()
+            .sqrt();
+        let norm_b: f32 = other
+            .embedding_vector
+            .iter()
+            .map(|x| x * x)
+            .sum::<f32>()
+            .sqrt();
 
         if norm_a == 0.0 || norm_b == 0.0 {
             0.0

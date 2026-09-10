@@ -18,17 +18,23 @@ impl AnalyticsHelper {
         error_message: Option<String>,
     ) -> AnalyticsEvent {
         let mut metadata = HashMap::new();
-        
+
         if let Some(feature) = feature_area {
-            metadata.insert("feature_area".to_string(), serde_json::Value::String(feature));
+            metadata.insert(
+                "feature_area".to_string(),
+                serde_json::Value::String(feature),
+            );
         }
         if let Some(task) = task_type {
             metadata.insert("task_type".to_string(), serde_json::Value::String(task));
         }
         if let Some(comps) = components {
-            metadata.insert("components".to_string(), serde_json::Value::Array(
-                comps.into_iter().map(serde_json::Value::String).collect()
-            ));
+            metadata.insert(
+                "components".to_string(),
+                serde_json::Value::Array(
+                    comps.into_iter().map(serde_json::Value::String).collect(),
+                ),
+            );
         }
 
         AnalyticsEvent {
@@ -56,7 +62,10 @@ impl AnalyticsHelper {
         error_message: Option<String>,
     ) -> AnalyticsEvent {
         let mut metadata = HashMap::new();
-        metadata.insert("operation".to_string(), serde_json::Value::String("create".to_string()));
+        metadata.insert(
+            "operation".to_string(),
+            serde_json::Value::String("create".to_string()),
+        );
 
         AnalyticsEvent {
             id: Uuid::new_v4().to_string(),
@@ -83,7 +92,10 @@ impl AnalyticsHelper {
         error_message: Option<String>,
     ) -> AnalyticsEvent {
         let mut metadata = HashMap::new();
-        metadata.insert("operation".to_string(), serde_json::Value::String("update".to_string()));
+        metadata.insert(
+            "operation".to_string(),
+            serde_json::Value::String("update".to_string()),
+        );
 
         AnalyticsEvent {
             id: Uuid::new_v4().to_string(),
@@ -110,7 +122,10 @@ impl AnalyticsHelper {
         error_message: Option<String>,
     ) -> AnalyticsEvent {
         let mut metadata = HashMap::new();
-        metadata.insert("operation".to_string(), serde_json::Value::String("delete".to_string()));
+        metadata.insert(
+            "operation".to_string(),
+            serde_json::Value::String("delete".to_string()),
+        );
 
         AnalyticsEvent {
             id: Uuid::new_v4().to_string(),
@@ -138,7 +153,10 @@ impl AnalyticsHelper {
         error_message: Option<String>,
     ) -> AnalyticsEvent {
         let mut metadata = HashMap::new();
-        metadata.insert("operation".to_string(), serde_json::Value::String(operation));
+        metadata.insert(
+            "operation".to_string(),
+            serde_json::Value::String(operation),
+        );
         metadata.insert("count".to_string(), serde_json::Value::Number(count.into()));
 
         AnalyticsEvent {
@@ -165,7 +183,10 @@ impl AnalyticsHelper {
         error_message: Option<String>,
     ) -> AnalyticsEvent {
         let mut metadata = HashMap::new();
-        metadata.insert("violations_count".to_string(), serde_json::Value::Number(violations_count.into()));
+        metadata.insert(
+            "violations_count".to_string(),
+            serde_json::Value::Number(violations_count.into()),
+        );
 
         AnalyticsEvent {
             id: Uuid::new_v4().to_string(),
@@ -191,7 +212,10 @@ impl AnalyticsHelper {
         error_message: Option<String>,
     ) -> AnalyticsEvent {
         let mut metadata = HashMap::new();
-        metadata.insert("cache_operation".to_string(), serde_json::Value::String(operation));
+        metadata.insert(
+            "cache_operation".to_string(),
+            serde_json::Value::String(operation),
+        );
 
         AnalyticsEvent {
             id: Uuid::new_v4().to_string(),
@@ -217,8 +241,11 @@ impl AnalyticsHelper {
         error_message: Option<String>,
     ) -> AnalyticsEvent {
         let mut metadata = HashMap::new();
-        metadata.insert("analytics_operation".to_string(), serde_json::Value::String(operation.clone()));
-        
+        metadata.insert(
+            "analytics_operation".to_string(),
+            serde_json::Value::String(operation.clone()),
+        );
+
         if let Some(ctx) = context {
             metadata.insert("context".to_string(), serde_json::Value::String(ctx));
         }

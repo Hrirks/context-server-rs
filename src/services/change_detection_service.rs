@@ -109,7 +109,10 @@ impl ChangeDetectionService {
         client_id: ClientId,
         feature_area: Option<String>,
     ) -> Result<()> {
-        debug!("Notifying bulk operation: {} in project {}", entity_type, project_id);
+        debug!(
+            "Notifying bulk operation: {} in project {}",
+            entity_type, project_id
+        );
 
         let change_event = ChangeEvent {
             entity_type: entity_type.to_string(),
@@ -149,7 +152,14 @@ pub trait ChangeEmitter {
     ) -> Result<()> {
         if let Some(detector) = self.get_change_detector() {
             detector
-                .notify_entity_created(entity_type, entity_id, project_id, entity_data, client_id, feature_area)
+                .notify_entity_created(
+                    entity_type,
+                    entity_id,
+                    project_id,
+                    entity_data,
+                    client_id,
+                    feature_area,
+                )
                 .await
                 .map_err(|e| {
                     error!("Failed to emit created event: {}", e);
@@ -172,7 +182,15 @@ pub trait ChangeEmitter {
     ) -> Result<()> {
         if let Some(detector) = self.get_change_detector() {
             detector
-                .notify_entity_updated(entity_type, entity_id, project_id, old_data, new_data, client_id, feature_area)
+                .notify_entity_updated(
+                    entity_type,
+                    entity_id,
+                    project_id,
+                    old_data,
+                    new_data,
+                    client_id,
+                    feature_area,
+                )
                 .await
                 .map_err(|e| {
                     error!("Failed to emit updated event: {}", e);
@@ -194,7 +212,14 @@ pub trait ChangeEmitter {
     ) -> Result<()> {
         if let Some(detector) = self.get_change_detector() {
             detector
-                .notify_entity_deleted(entity_type, entity_id, project_id, old_data, client_id, feature_area)
+                .notify_entity_deleted(
+                    entity_type,
+                    entity_id,
+                    project_id,
+                    old_data,
+                    client_id,
+                    feature_area,
+                )
                 .await
                 .map_err(|e| {
                     error!("Failed to emit deleted event: {}", e);
@@ -215,7 +240,13 @@ pub trait ChangeEmitter {
     ) -> Result<()> {
         if let Some(detector) = self.get_change_detector() {
             detector
-                .notify_bulk_operation(entity_type, project_id, operation_summary, client_id, feature_area)
+                .notify_bulk_operation(
+                    entity_type,
+                    project_id,
+                    operation_summary,
+                    client_id,
+                    feature_area,
+                )
                 .await
                 .map_err(|e| {
                     error!("Failed to emit bulk operation event: {}", e);
@@ -236,7 +267,7 @@ mod tests {
     async fn test_change_detection_service_creation() {
         let broadcaster = Arc::new(ChangeBroadcaster::new());
         let detector = ChangeDetectionService::new(broadcaster.clone());
-        
+
         assert!(Arc::ptr_eq(&detector.get_broadcaster(), &broadcaster));
     }
 

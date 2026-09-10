@@ -1,10 +1,12 @@
-use crate::models::enhanced_context::{EnhancedContextItem, ContextId, ProjectId};
-use crate::services::websocket_types::{ContextChange, ConflictStrategy, ConflictResolution, ChangeMetadata, ClientId};
-use anyhow::{Result, anyhow};
+use crate::models::enhanced_context::{ContextId, EnhancedContextItem, ProjectId};
+use crate::services::websocket_types::{
+    ChangeMetadata, ClientId, ConflictResolution, ConflictStrategy, ContextChange,
+};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, warn, error};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 /// Conflict resolution engine for handling concurrent context modifications
@@ -153,7 +155,9 @@ impl ConflictResolutionEngine {
 
         // Check for version conflicts first (highest priority)
         if self.config.auto_detect_version_conflicts {
-            if let Some(version_conflict) = self.detect_version_conflict(incoming_change, existing_entity)? {
+            if let Some(version_conflict) =
+                self.detect_version_conflict(incoming_change, existing_entity)?
+            {
                 conflicts.push(version_conflict);
                 detected_conflict_type = ConflictType::VersionConflict;
             }
@@ -161,14 +165,18 @@ impl ConflictResolutionEngine {
 
         // Check for content conflicts (only if no version conflict detected)
         if conflicts.is_empty() && self.config.auto_detect_content_conflicts {
-            if let Some(content_conflict) = self.detect_content_conflict(incoming_change, recent_changes)? {
+            if let Some(content_conflict) =
+                self.detect_content_conflict(incoming_change, recent_changes)?
+            {
                 conflicts.push(content_conflict);
                 detected_conflict_type = ConflictType::ContentConflict;
             }
         }
 
         // Check for semantic conflicts
-        if let Some(semantic_conflict) = self.detect_semantic_conflict(incoming_change, existing_entity)? {
+        if let Some(semantic_conflict) =
+            self.detect_semantic_conflict(incoming_change, existing_entity)?
+        {
             conflicts.push(semantic_conflict);
             detected_conflict_type = ConflictType::SemanticConflict;
         }
@@ -194,7 +202,8 @@ impl ConflictResolutionEngine {
         };
 
         // Store the conflict
-        self.active_conflicts.insert(conflict_id.clone(), conflict_info.clone());
+        self.active_conflicts
+            .insert(conflict_id.clone(), conflict_info.clone());
 
         debug!("Conflict detected: {}", conflict_id);
         Ok(Some(conflict_info))
@@ -207,26 +216,26 @@ impl ConflictResolutionEngine {
         strategy: ConflictStrategy,
         resolver: Option<String>,
     ) -> Result<ConflictResolutionResult> {
-        let mut conflict = self.active_conflicts
+        let mut conflict = self
+            .active_conflicts
             .get(conflict_id)
             .ok_or_else(|| anyhow!("Conflict not found: {}", conflict_id))?
             .clone();
 
-        debug!("Resolving conflict {} using strategy {:?}", conflict_id, strategy);
+        debug!(
+            "Resolving conflict {} using strategy {:?}",
+            conflict_id, strategy
+        );
 
         let resolution_result = match strategy {
-            ConflictStrategy::LastWriterWins => {
-                self.resolve_last_writer_wins(&conflict).await?
-            }
-            ConflictStrategy::AutoMerge => {
-                self.resolve_auto_merge(&conflict).await?
-            }
+            ConflictStrategy::LastWriterWins => self.resolve_last_writer_wins(&conflict).await?,
+            ConflictStrategy::AutoMerge => self.resolve_auto_merge(&conflict).await?,
             ConflictStrategy::ManualResolution => {
-                return Err(anyhow!("Manual resolution requires explicit resolution data"));
+                return Err(anyhow!(
+                    "Manual resolution requires explicit resolution data"
+                ));
             }
-            ConflictStrategy::Reject => {
-                self.resolve_reject(&conflict).await?
-            }
+            ConflictStrategy::Reject => self.resolve_reject(&conflict).await?,
         };
 
         // Update conflict info
@@ -236,7 +245,8 @@ impl ConflictResolutionEngine {
         conflict.resolution_result = Some(resolution_result.clone());
 
         // Store updated conflict
-        self.active_conflicts.insert(conflict_id.to_string(), conflict);
+        self.active_conflicts
+            .insert(conflict_id.to_string(), conflict);
 
         debug!("Conflict {} resolved successfully", conflict_id);
         Ok(resolution_result)
@@ -247,7 +257,8 @@ impl ConflictResolutionEngine {
         &mut self,
         request: ManualResolutionRequest,
     ) -> Result<ConflictResolutionResult> {
-        let mut conflict = self.active_conflicts
+        let mut conflict = self
+            .active_conflicts
             .get(&request.conflict_id)
             .ok_or_else(|| anyhow!("Conflict not found: {}", request.conflict_id))?
             .clone();
@@ -257,7 +268,8 @@ impl ConflictResolutionEngine {
         let resolution_result = ConflictResolutionResult {
             strategy_used: request.resolution_strategy.clone(),
             resolved_entity: request.resolved_entity,
-            discarded_changes: conflict.conflicting_changes
+            discarded_changes: conflict
+                .conflicting_changes
                 .iter()
                 .map(|c| c.change_id)
                 .collect(),
@@ -272,7 +284,8 @@ impl ConflictResolutionEngine {
         conflict.resolution_result = Some(resolution_result.clone());
 
         // Store updated conflict
-        self.active_conflicts.insert(request.conflict_id.clone(), conflict);
+        self.active_conflicts
+            .insert(request.conflict_id.clone(), conflict);
 
         debug!("Conflict {} manually resolved", request.conflict_id);
         Ok(resolution_result)
@@ -349,14 +362,16 @@ impl ConflictResolutionEngine {
         incoming_change: &ContextChange,
         recent_changes: &[ContextChange],
     ) -> Result<Option<ConflictingChange>> {
-        let threshold = chrono::Duration::seconds(self.config.concurrent_change_threshold_seconds as i64);
+        let threshold =
+            chrono::Duration::seconds(self.config.concurrent_change_threshold_seconds as i64);
 
         for recent_change in recent_changes {
             if recent_change.entity_id == incoming_change.entity_id
                 && recent_change.change_id != incoming_change.change_id
             {
-                let time_diff = incoming_change.metadata.timestamp - recent_change.metadata.timestamp;
-                
+                let time_diff =
+                    incoming_change.metadata.timestamp - recent_change.metadata.timestamp;
+
                 if time_diff.abs() < threshold {
                     debug!(
                         "Content conflict detected: concurrent changes within {} seconds",
@@ -414,16 +429,21 @@ impl ConflictResolutionEngine {
     }
 
     /// Resolve conflict using last-writer-wins strategy
-    async fn resolve_last_writer_wins(&self, conflict: &ConflictInfo) -> Result<ConflictResolutionResult> {
+    async fn resolve_last_writer_wins(
+        &self,
+        conflict: &ConflictInfo,
+    ) -> Result<ConflictResolutionResult> {
         debug!("Resolving conflict using last-writer-wins strategy");
 
         // Find the most recent change
-        let latest_change = conflict.conflicting_changes
+        let latest_change = conflict
+            .conflicting_changes
             .iter()
             .max_by_key(|c| c.change.metadata.timestamp)
             .ok_or_else(|| anyhow!("No conflicting changes found"))?;
 
-        let discarded_changes: Vec<Uuid> = conflict.conflicting_changes
+        let discarded_changes: Vec<Uuid> = conflict
+            .conflicting_changes
             .iter()
             .filter(|c| c.change_id != latest_change.change_id)
             .map(|c| c.change_id)
@@ -439,12 +459,15 @@ impl ConflictResolutionEngine {
     }
 
     /// Resolve conflict using automatic merge strategy
-    async fn resolve_auto_merge(&self, conflict: &ConflictInfo) -> Result<ConflictResolutionResult> {
+    async fn resolve_auto_merge(
+        &self,
+        conflict: &ConflictInfo,
+    ) -> Result<ConflictResolutionResult> {
         debug!("Resolving conflict using auto-merge strategy");
 
         // For now, implement a simple merge that combines non-conflicting fields
         let merged_entity = self.merge_changes(&conflict.conflicting_changes)?;
-        
+
         let merge_details = MergeDetails {
             merge_algorithm: "simple_field_merge".to_string(),
             conflicts_resolved: conflict.conflicting_changes.len() as u32,
@@ -465,7 +488,8 @@ impl ConflictResolutionEngine {
     async fn resolve_reject(&self, conflict: &ConflictInfo) -> Result<ConflictResolutionResult> {
         debug!("Resolving conflict by rejecting all changes");
 
-        let discarded_changes: Vec<Uuid> = conflict.conflicting_changes
+        let discarded_changes: Vec<Uuid> = conflict
+            .conflicting_changes
             .iter()
             .map(|c| c.change_id)
             .collect();
@@ -486,7 +510,9 @@ impl ConflictResolutionEngine {
         }
 
         // Start with the first change as base
-        let mut merged = changes[0].change.full_entity
+        let mut merged = changes[0]
+            .change
+            .full_entity
             .as_ref()
             .ok_or_else(|| anyhow!("No entity data in first change"))?
             .clone();
@@ -510,7 +536,7 @@ impl ConflictResolutionEngine {
         match (base, overlay) {
             (serde_json::Value::Object(base_obj), serde_json::Value::Object(overlay_obj)) => {
                 let mut merged = base_obj.clone();
-                
+
                 for (key, value) in overlay_obj {
                     if let Some(base_value) = merged.get(key) {
                         // Recursively merge nested objects
@@ -519,7 +545,7 @@ impl ConflictResolutionEngine {
                         merged.insert(key.clone(), value.clone());
                     }
                 }
-                
+
                 Ok(serde_json::Value::Object(merged))
             }
             _ => {
@@ -575,7 +601,10 @@ mod tests {
     async fn test_conflict_resolution_engine_creation() {
         let engine = ConflictResolutionEngine::new();
         assert_eq!(engine.active_conflicts.len(), 0);
-        assert_eq!(engine.config.default_strategy, ConflictStrategy::LastWriterWins);
+        assert_eq!(
+            engine.config.default_strategy,
+            ConflictStrategy::LastWriterWins
+        );
     }
 
     #[tokio::test]
@@ -678,10 +707,16 @@ mod tests {
             resolution_result: None,
         };
 
-        engine.active_conflicts.insert(conflict_info.conflict_id.clone(), conflict_info.clone());
+        engine
+            .active_conflicts
+            .insert(conflict_info.conflict_id.clone(), conflict_info.clone());
 
         let result = engine
-            .resolve_conflict(&conflict_info.conflict_id, ConflictStrategy::LastWriterWins, Some("test-resolver".to_string()))
+            .resolve_conflict(
+                &conflict_info.conflict_id,
+                ConflictStrategy::LastWriterWins,
+                Some("test-resolver".to_string()),
+            )
             .await
             .unwrap();
 
@@ -705,7 +740,8 @@ mod tests {
             "description": "Original description"
         }));
 
-        let mut change2 = create_test_change("rule-1", 1, client2, now + chrono::Duration::seconds(10));
+        let mut change2 =
+            create_test_change("rule-1", 1, client2, now + chrono::Duration::seconds(10));
         change2.full_entity = Some(json!({
             "id": "rule-1",
             "name": "Rule from Client 2",
@@ -749,10 +785,16 @@ mod tests {
             resolution_result: None,
         };
 
-        engine.active_conflicts.insert(conflict_info.conflict_id.clone(), conflict_info.clone());
+        engine
+            .active_conflicts
+            .insert(conflict_info.conflict_id.clone(), conflict_info.clone());
 
         let result = engine
-            .resolve_conflict(&conflict_info.conflict_id, ConflictStrategy::AutoMerge, Some("test-resolver".to_string()))
+            .resolve_conflict(
+                &conflict_info.conflict_id,
+                ConflictStrategy::AutoMerge,
+                Some("test-resolver".to_string()),
+            )
             .await
             .unwrap();
 
@@ -782,7 +824,9 @@ mod tests {
             resolution_result: None,
         };
 
-        engine.active_conflicts.insert(conflict_id.clone(), conflict_info);
+        engine
+            .active_conflicts
+            .insert(conflict_id.clone(), conflict_info);
 
         let manual_request = ManualResolutionRequest {
             conflict_id: conflict_id.clone(),
@@ -808,7 +852,10 @@ mod tests {
         // Check that conflict is marked as resolved
         let updated_conflict = engine.get_conflict_info(&conflict_id).unwrap();
         assert!(updated_conflict.resolved_at.is_some());
-        assert_eq!(updated_conflict.resolved_by, Some("human-reviewer".to_string()));
+        assert_eq!(
+            updated_conflict.resolved_by,
+            Some("human-reviewer".to_string())
+        );
     }
 
     #[tokio::test]
@@ -846,8 +893,12 @@ mod tests {
             resolution_result: None,
         };
 
-        engine.active_conflicts.insert("active-1".to_string(), active_conflict);
-        engine.active_conflicts.insert("resolved-1".to_string(), resolved_conflict);
+        engine
+            .active_conflicts
+            .insert("active-1".to_string(), active_conflict);
+        engine
+            .active_conflicts
+            .insert("resolved-1".to_string(), resolved_conflict);
 
         let active_conflicts = engine.get_active_conflicts(project_id);
         assert_eq!(active_conflicts.len(), 1);

@@ -6,7 +6,7 @@ use uuid::Uuid;
 #[tokio::test]
 async fn test_websocket_manager_creation() {
     let manager = WebSocketManager::new();
-    
+
     // Test that manager is created successfully
     assert!(manager.connections.is_empty());
     assert!(manager.message_queue.is_empty());
@@ -18,7 +18,7 @@ async fn test_sync_filters_matching() {
     let project_id = "test-project".to_string();
     let entity_type = "business_rule".to_string();
     let feature_area = "authentication".to_string();
-    
+
     // Create a test context change
     let change = ContextChange {
         change_id: Uuid::new_v4(),
@@ -106,14 +106,18 @@ async fn test_websocket_message_serialization() {
 
     let serialized = serde_json::to_string(&auth_msg).unwrap();
     let deserialized: WebSocketMessage = serde_json::from_str(&serialized).unwrap();
-    
+
     match deserialized {
-        WebSocketMessage::Auth { token, project_id, client_info } => {
+        WebSocketMessage::Auth {
+            token,
+            project_id,
+            client_info,
+        } => {
             assert_eq!(token, Some("test-token".to_string()));
             assert_eq!(project_id, "test-project");
             assert_eq!(client_info.version, "1.0.0");
             match client_info.client_type {
-                ClientType::AIAgent => {},
+                ClientType::AIAgent => {}
                 _ => panic!("Wrong client type"),
             }
         }
@@ -147,9 +151,13 @@ async fn test_websocket_message_serialization() {
 
     let serialized = serde_json::to_string(&change_msg).unwrap();
     let deserialized: WebSocketMessage = serde_json::from_str(&serialized).unwrap();
-    
+
     match deserialized {
-        WebSocketMessage::ContextChange { message_id: _, change: deserialized_change, timestamp: _ } => {
+        WebSocketMessage::ContextChange {
+            message_id: _,
+            change: deserialized_change,
+            timestamp: _,
+        } => {
             assert_eq!(deserialized_change.entity_type, "business_rule");
             assert_eq!(deserialized_change.change_type, ChangeType::Update);
             assert_eq!(deserialized_change.metadata.version, 2);
@@ -162,9 +170,9 @@ async fn test_websocket_message_serialization() {
 async fn test_sync_status_creation() {
     let manager = WebSocketManager::new();
     let project_id = "test-project";
-    
+
     let status = manager.get_sync_status(project_id).await;
-    
+
     assert_eq!(status.project_id, project_id);
     assert_eq!(status.connected_clients, 0);
     assert_eq!(status.pending_changes, 0);
@@ -185,9 +193,12 @@ async fn test_conflict_resolution_types() {
     // Test serialization
     let serialized = serde_json::to_string(&resolution).unwrap();
     let deserialized: ConflictResolution = serde_json::from_str(&serialized).unwrap();
-    
+
     assert_eq!(deserialized.resolved_by, "system");
-    assert!(matches!(deserialized.strategy, ConflictStrategy::LastWriterWins));
+    assert!(matches!(
+        deserialized.strategy,
+        ConflictStrategy::LastWriterWins
+    ));
     assert_eq!(deserialized.original_changes.len(), 2);
 }
 
@@ -211,13 +222,13 @@ async fn test_client_info_types() {
         // Test serialization
         let serialized = serde_json::to_string(&client_info).unwrap();
         let deserialized: ClientInfo = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(deserialized.version, "1.0.0");
         match (&client_type, &deserialized.client_type) {
-            (ClientType::AIAgent, ClientType::AIAgent) => {},
-            (ClientType::IDE, ClientType::IDE) => {},
-            (ClientType::WebInterface, ClientType::WebInterface) => {},
-            (ClientType::CLI, ClientType::CLI) => {},
+            (ClientType::AIAgent, ClientType::AIAgent) => {}
+            (ClientType::IDE, ClientType::IDE) => {}
+            (ClientType::WebInterface, ClientType::WebInterface) => {}
+            (ClientType::CLI, ClientType::CLI) => {}
             (ClientType::Other(a), ClientType::Other(b)) => assert_eq!(a, b),
             _ => panic!("Client type mismatch"),
         }

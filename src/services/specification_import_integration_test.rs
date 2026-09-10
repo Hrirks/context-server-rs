@@ -10,7 +10,11 @@ mod tests {
     async fn test_specification_import_integration() {
         // Create a temporary directory structure
         let temp_dir = TempDir::new().unwrap();
-        let kiro_specs_dir = temp_dir.path().join(".kiro").join("specs").join("test-project");
+        let kiro_specs_dir = temp_dir
+            .path()
+            .join(".kiro")
+            .join("specs")
+            .join("test-project");
         fs::create_dir_all(&kiro_specs_dir).await.unwrap();
 
         // Create test specification files
@@ -82,9 +86,15 @@ The system consists of:
 "#;
 
         // Write the test files
-        fs::write(kiro_specs_dir.join("requirements.md"), requirements_content).await.unwrap();
-        fs::write(kiro_specs_dir.join("design.md"), design_content).await.unwrap();
-        fs::write(kiro_specs_dir.join("tasks.md"), tasks_content).await.unwrap();
+        fs::write(kiro_specs_dir.join("requirements.md"), requirements_content)
+            .await
+            .unwrap();
+        fs::write(kiro_specs_dir.join("design.md"), design_content)
+            .await
+            .unwrap();
+        fs::write(kiro_specs_dir.join("tasks.md"), tasks_content)
+            .await
+            .unwrap();
 
         // Create the application container with a test database
         let db_path = temp_dir.path().join("test.db");
@@ -103,9 +113,15 @@ The system consists of:
 
         // Check that we have the expected specification types
         let spec_types: Vec<_> = imported_specs.iter().map(|s| &s.spec_type).collect();
-        assert!(spec_types.iter().any(|t| matches!(t, crate::models::specification::SpecType::Requirements)));
-        assert!(spec_types.iter().any(|t| matches!(t, crate::models::specification::SpecType::Design)));
-        assert!(spec_types.iter().any(|t| matches!(t, crate::models::specification::SpecType::Tasks)));
+        assert!(spec_types
+            .iter()
+            .any(|t| matches!(t, crate::models::specification::SpecType::Requirements)));
+        assert!(spec_types
+            .iter()
+            .any(|t| matches!(t, crate::models::specification::SpecType::Design)));
+        assert!(spec_types
+            .iter()
+            .any(|t| matches!(t, crate::models::specification::SpecType::Tasks)));
 
         // Test individual file import
         let requirements_file = kiro_specs_dir.join("requirements.md");
@@ -115,9 +131,15 @@ The system consists of:
             .await
             .unwrap();
 
-        assert_eq!(imported_spec.spec_type, crate::models::specification::SpecType::Requirements);
+        assert_eq!(
+            imported_spec.spec_type,
+            crate::models::specification::SpecType::Requirements
+        );
         assert_eq!(imported_spec.project_id, "test-project");
-        assert!(imported_spec.content.raw_content.contains("professional context engine"));
+        assert!(imported_spec
+            .content
+            .raw_content
+            .contains("professional context engine"));
 
         // Test specification validation
         let validation_issues = container
@@ -156,7 +178,11 @@ The system consists of:
     #[tokio::test]
     async fn test_specification_validation_errors() {
         let temp_dir = TempDir::new().unwrap();
-        let kiro_specs_dir = temp_dir.path().join(".kiro").join("specs").join("invalid-project");
+        let kiro_specs_dir = temp_dir
+            .path()
+            .join(".kiro")
+            .join("specs")
+            .join("invalid-project");
         fs::create_dir_all(&kiro_specs_dir).await.unwrap();
 
         // Create an invalid specification file (wrong name for content type)
@@ -166,7 +192,9 @@ The system consists of:
 This should be a requirements document but has the wrong content.
 "#;
 
-        fs::write(kiro_specs_dir.join("requirements.md"), invalid_content).await.unwrap();
+        fs::write(kiro_specs_dir.join("requirements.md"), invalid_content)
+            .await
+            .unwrap();
 
         let db_path = temp_dir.path().join("test.db");
         let container = AppContainer::new(db_path.to_str().unwrap()).unwrap();
@@ -183,7 +211,9 @@ This should be a requirements document but has the wrong content.
         assert!(!validation_issues.is_empty());
         println!("Validation issues: {:?}", validation_issues);
         // The validation should detect that this is not a proper requirements specification
-        assert!(validation_issues.iter().any(|issue| issue.contains("requirements") || issue.contains("specification")));
+        assert!(validation_issues
+            .iter()
+            .any(|issue| issue.contains("requirements") || issue.contains("specification")));
 
         println!("✅ Specification validation error test passed!");
     }

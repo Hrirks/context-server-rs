@@ -43,7 +43,7 @@ impl WebSocketServer {
                 Ok((stream, addr)) => {
                     info!("New connection from {}", addr);
                     let manager = self.manager.clone();
-                    
+
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_connection(manager, stream).await {
                             error!("Error handling connection from {}: {}", addr, e);
@@ -58,10 +58,7 @@ impl WebSocketServer {
     }
 
     /// Handle a new connection
-    async fn handle_connection(
-        manager: Arc<WebSocketManager>,
-        stream: TcpStream,
-    ) -> Result<()> {
+    async fn handle_connection(manager: Arc<WebSocketManager>, stream: TcpStream) -> Result<()> {
         manager.handle_connection(stream).await
     }
 }
@@ -71,13 +68,13 @@ impl WebSocketServer {
 pub trait WebSocketService {
     /// Broadcast a context change to all connected clients
     async fn broadcast_change(&self, change: ContextChange) -> Result<()>;
-    
+
     /// Get connection status for a client
     async fn get_connection_status(&self, client_id: ClientId) -> Option<ConnectionStatus>;
-    
+
     /// Get sync status for a project
     async fn get_sync_status(&self, project_id: &str) -> SyncStatus;
-    
+
     /// Get all connected clients for a project
     async fn get_project_clients(&self, project_id: &str) -> Vec<ClientId>;
 }
@@ -88,17 +85,18 @@ impl WebSocketService for WebSocketManager {
     async fn broadcast_change(&self, change: ContextChange) -> Result<()> {
         self.broadcast_change(change).await
     }
-    
+
     async fn get_connection_status(&self, client_id: ClientId) -> Option<ConnectionStatus> {
         self.get_connection_status(client_id).await
     }
-    
+
     async fn get_sync_status(&self, project_id: &str) -> SyncStatus {
         self.get_sync_status(project_id).await
     }
-    
+
     async fn get_project_clients(&self, project_id: &str) -> Vec<ClientId> {
-        self.connections.iter()
+        self.connections
+            .iter()
             .filter_map(|entry| {
                 if entry.value().project_id == project_id {
                     Some(*entry.key())

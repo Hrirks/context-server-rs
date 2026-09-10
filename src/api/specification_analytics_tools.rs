@@ -1,5 +1,5 @@
 use crate::services::specification_analytics_service::SpecificationAnalyticsService;
-use rmcp::model::{ErrorData as McpError, Tool, CallToolResult, Content};
+use rmcp::model::{CallToolResult, Content, ErrorData as McpError, Tool};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -102,23 +102,46 @@ impl SpecificationAnalyticsTools {
     }
 
     /// Handle specification analytics tool calls
-    pub async fn handle_tool_call(&self, name: &str, arguments: Value) -> Result<CallToolResult, McpError> {
+    pub async fn handle_tool_call(
+        &self,
+        name: &str,
+        arguments: Value,
+    ) -> Result<CallToolResult, McpError> {
         match name {
-            "track_requirements_progress" => self.handle_track_requirements_progress(arguments).await,
+            "track_requirements_progress" => {
+                self.handle_track_requirements_progress(arguments).await
+            }
             "track_tasks_progress" => self.handle_track_tasks_progress(arguments).await,
-            "analyze_specification_completeness" => self.handle_analyze_specification_completeness(arguments).await,
-            "calculate_development_velocity" => self.handle_calculate_development_velocity(arguments).await,
-            "generate_specification_health_report" => self.handle_generate_specification_health_report(arguments).await,
-            _ => Err(McpError::method_not_found::<rmcp::model::CallToolRequestMethod>()),
+            "analyze_specification_completeness" => {
+                self.handle_analyze_specification_completeness(arguments)
+                    .await
+            }
+            "calculate_development_velocity" => {
+                self.handle_calculate_development_velocity(arguments).await
+            }
+            "generate_specification_health_report" => {
+                self.handle_generate_specification_health_report(arguments)
+                    .await
+            }
+            _ => Err(McpError::method_not_found::<
+                rmcp::model::CallToolRequestMethod,
+            >()),
         }
     }
 
-    async fn handle_track_requirements_progress(&self, arguments: Value) -> Result<CallToolResult, McpError> {
-        let project_id = arguments.get("project_id")
+    async fn handle_track_requirements_progress(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id = arguments
+            .get("project_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::invalid_params("Missing or invalid project_id", None))?;
 
-        let progress = self.analytics_service.track_requirements_progress(project_id).await?;
+        let progress = self
+            .analytics_service
+            .track_requirements_progress(project_id)
+            .await?;
 
         let result = json!({
             "project_id": project_id,
@@ -129,23 +152,34 @@ impl SpecificationAnalyticsTools {
                 "completed_requirements": progress.iter().filter(|r| r.completion_percentage >= 1.0).count(),
                 "in_progress_requirements": progress.iter().filter(|r| r.completion_percentage > 0.0 && r.completion_percentage < 1.0).count(),
                 "not_started_requirements": progress.iter().filter(|r| r.completion_percentage == 0.0).count(),
-                "average_completion": if progress.is_empty() { 0.0 } else { 
-                    progress.iter().map(|r| r.completion_percentage).sum::<f64>() / progress.len() as f64 
+                "average_completion": if progress.is_empty() { 0.0 } else {
+                    progress.iter().map(|r| r.completion_percentage).sum::<f64>() / progress.len() as f64
                 },
                 "stale_requirements": progress.iter().filter(|r| r.days_since_last_update > 30).count(),
                 "high_priority_requirements": progress.iter().filter(|r| matches!(r.priority, crate::models::specification::Priority::Critical | crate::models::specification::Priority::High)).count(),
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!("Requirements Progress Tracking for Project: {}\n\n{}", project_id, serde_json::to_string_pretty(&result).unwrap()))]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Requirements Progress Tracking for Project: {}\n\n{}",
+            project_id,
+            serde_json::to_string_pretty(&result).unwrap()
+        ))]))
     }
 
-    async fn handle_track_tasks_progress(&self, arguments: Value) -> Result<CallToolResult, McpError> {
-        let project_id = arguments.get("project_id")
+    async fn handle_track_tasks_progress(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id = arguments
+            .get("project_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::invalid_params("Missing or invalid project_id", None))?;
 
-        let progress = self.analytics_service.track_tasks_progress(project_id).await?;
+        let progress = self
+            .analytics_service
+            .track_tasks_progress(project_id)
+            .await?;
 
         let result = json!({
             "project_id": project_id,
@@ -157,8 +191,8 @@ impl SpecificationAnalyticsTools {
                 "in_progress_tasks": progress.iter().filter(|t| t.status == crate::models::specification::TaskStatus::InProgress).count(),
                 "not_started_tasks": progress.iter().filter(|t| t.status == crate::models::specification::TaskStatus::NotStarted).count(),
                 "blocked_tasks": progress.iter().filter(|t| t.is_blocked).count(),
-                "average_progress": if progress.is_empty() { 0.0 } else { 
-                    progress.iter().map(|t| t.progress).sum::<f64>() / progress.len() as f64 
+                "average_progress": if progress.is_empty() { 0.0 } else {
+                    progress.iter().map(|t| t.progress).sum::<f64>() / progress.len() as f64
                 },
                 "tasks_with_dependencies": progress.iter().filter(|t| t.dependencies_count > 0).count(),
                 "tasks_with_subtasks": progress.iter().filter(|t| t.subtasks_count > 0).count(),
@@ -167,15 +201,26 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!("Tasks Progress Tracking for Project: {}\n\n{}", project_id, serde_json::to_string_pretty(&result).unwrap()))]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Tasks Progress Tracking for Project: {}\n\n{}",
+            project_id,
+            serde_json::to_string_pretty(&result).unwrap()
+        ))]))
     }
 
-    async fn handle_analyze_specification_completeness(&self, arguments: Value) -> Result<CallToolResult, McpError> {
-        let project_id = arguments.get("project_id")
+    async fn handle_analyze_specification_completeness(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id = arguments
+            .get("project_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::invalid_params("Missing or invalid project_id", None))?;
 
-        let completeness = self.analytics_service.analyze_specification_completeness(project_id).await?;
+        let completeness = self
+            .analytics_service
+            .analyze_specification_completeness(project_id)
+            .await?;
 
         let result = json!({
             "project_id": project_id,
@@ -185,8 +230,8 @@ impl SpecificationAnalyticsTools {
                 "total_specifications": completeness.len(),
                 "complete_specifications": completeness.iter().filter(|s| s.completeness_score >= 0.8).count(),
                 "incomplete_specifications": completeness.iter().filter(|s| s.completeness_score < 0.5).count(),
-                "average_completeness": if completeness.is_empty() { 0.0 } else { 
-                    completeness.iter().map(|s| s.completeness_score).sum::<f64>() / completeness.len() as f64 
+                "average_completeness": if completeness.is_empty() { 0.0 } else {
+                    completeness.iter().map(|s| s.completeness_score).sum::<f64>() / completeness.len() as f64
                 },
                 "specifications_with_issues": completeness.iter().filter(|s| !s.quality_issues.is_empty()).count(),
                 "specifications_with_missing_sections": completeness.iter().filter(|s| !s.missing_sections.is_empty()).count(),
@@ -194,23 +239,35 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!("Specification Completeness Analysis for Project: {}\n\n{}", project_id, serde_json::to_string_pretty(&result).unwrap()))]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Specification Completeness Analysis for Project: {}\n\n{}",
+            project_id,
+            serde_json::to_string_pretty(&result).unwrap()
+        ))]))
     }
 
-    async fn handle_calculate_development_velocity(&self, arguments: Value) -> Result<CallToolResult, McpError> {
-        let project_id = arguments.get("project_id")
+    async fn handle_calculate_development_velocity(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id = arguments
+            .get("project_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::invalid_params("Missing or invalid project_id", None))?;
 
-        let days = arguments.get("days")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(30);
+        let days = arguments.get("days").and_then(|v| v.as_i64()).unwrap_or(30);
 
         if days < 1 || days > 365 {
-            return Err(McpError::invalid_params("Days must be between 1 and 365", None));
+            return Err(McpError::invalid_params(
+                "Days must be between 1 and 365",
+                None,
+            ));
         }
 
-        let velocity = self.analytics_service.calculate_development_velocity(project_id, days).await?;
+        let velocity = self
+            .analytics_service
+            .calculate_development_velocity(project_id, days)
+            .await?;
 
         let result = json!({
             "project_id": project_id,
@@ -236,15 +293,27 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!("Development Velocity Metrics for Project: {} (Last {} days)\n\n{}", project_id, days, serde_json::to_string_pretty(&result).unwrap()))]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Development Velocity Metrics for Project: {} (Last {} days)\n\n{}",
+            project_id,
+            days,
+            serde_json::to_string_pretty(&result).unwrap()
+        ))]))
     }
 
-    async fn handle_generate_specification_health_report(&self, arguments: Value) -> Result<CallToolResult, McpError> {
-        let project_id = arguments.get("project_id")
+    async fn handle_generate_specification_health_report(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, McpError> {
+        let project_id = arguments
+            .get("project_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::invalid_params("Missing or invalid project_id", None))?;
 
-        let report = self.analytics_service.generate_health_report(project_id).await?;
+        let report = self
+            .analytics_service
+            .generate_health_report(project_id)
+            .await?;
 
         let result = json!({
             "project_id": project_id,
@@ -270,19 +339,24 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!("Specification Health Report for Project: {}\n\n{}", project_id, serde_json::to_string_pretty(&result).unwrap()))]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Specification Health Report for Project: {}\n\n{}",
+            project_id,
+            serde_json::to_string_pretty(&result).unwrap()
+        ))]))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::specification_analytics_service::{
-        SpecificationAnalyticsService, RequirementProgress, TaskProgress, 
-        SpecificationCompleteness, DevelopmentVelocity, SpecificationHealthReport,
-        VelocityTrend
+    use crate::models::specification::{
+        Complexity, Priority, RequirementStatus, SpecStatus, SpecType, TaskStatus,
     };
-    use crate::models::specification::{RequirementStatus, TaskStatus, Priority, Complexity, SpecType, SpecStatus};
+    use crate::services::specification_analytics_service::{
+        DevelopmentVelocity, RequirementProgress, SpecificationAnalyticsService,
+        SpecificationCompleteness, SpecificationHealthReport, TaskProgress, VelocityTrend,
+    };
     use async_trait::async_trait;
     use chrono::Utc;
 
@@ -290,7 +364,10 @@ mod tests {
 
     #[async_trait]
     impl SpecificationAnalyticsService for MockSpecificationAnalyticsService {
-        async fn track_requirements_progress(&self, _project_id: &str) -> Result<Vec<RequirementProgress>, McpError> {
+        async fn track_requirements_progress(
+            &self,
+            _project_id: &str,
+        ) -> Result<Vec<RequirementProgress>, McpError> {
             Ok(vec![RequirementProgress {
                 requirement_id: "req-1".to_string(),
                 title: "Test Requirement".to_string(),
@@ -308,7 +385,10 @@ mod tests {
             }])
         }
 
-        async fn track_tasks_progress(&self, _project_id: &str) -> Result<Vec<TaskProgress>, McpError> {
+        async fn track_tasks_progress(
+            &self,
+            _project_id: &str,
+        ) -> Result<Vec<TaskProgress>, McpError> {
             Ok(vec![TaskProgress {
                 task_id: "task-1".to_string(),
                 title: "Test Task".to_string(),
@@ -330,7 +410,10 @@ mod tests {
             }])
         }
 
-        async fn analyze_specification_completeness(&self, _project_id: &str) -> Result<Vec<SpecificationCompleteness>, McpError> {
+        async fn analyze_specification_completeness(
+            &self,
+            _project_id: &str,
+        ) -> Result<Vec<SpecificationCompleteness>, McpError> {
             Ok(vec![SpecificationCompleteness {
                 spec_id: "spec-1".to_string(),
                 spec_type: SpecType::Requirements,
@@ -346,7 +429,11 @@ mod tests {
             }])
         }
 
-        async fn calculate_development_velocity(&self, _project_id: &str, days: i64) -> Result<DevelopmentVelocity, McpError> {
+        async fn calculate_development_velocity(
+            &self,
+            _project_id: &str,
+            days: i64,
+        ) -> Result<DevelopmentVelocity, McpError> {
             Ok(DevelopmentVelocity {
                 project_id: "test-project".to_string(),
                 time_period_days: days,
@@ -360,7 +447,10 @@ mod tests {
             })
         }
 
-        async fn generate_health_report(&self, project_id: &str) -> Result<SpecificationHealthReport, McpError> {
+        async fn generate_health_report(
+            &self,
+            project_id: &str,
+        ) -> Result<SpecificationHealthReport, McpError> {
             let requirements_progress = self.track_requirements_progress(project_id).await?;
             let tasks_progress = self.track_tasks_progress(project_id).await?;
             let specifications = self.analyze_specification_completeness(project_id).await?;
@@ -379,11 +469,21 @@ mod tests {
             })
         }
 
-        async fn track_task_status_change(&self, _task_id: &str, _old_status: TaskStatus, _new_status: TaskStatus) -> Result<(), McpError> {
+        async fn track_task_status_change(
+            &self,
+            _task_id: &str,
+            _old_status: TaskStatus,
+            _new_status: TaskStatus,
+        ) -> Result<(), McpError> {
             Ok(())
         }
 
-        async fn track_requirement_status_change(&self, _requirement_id: &str, _old_status: RequirementStatus, _new_status: RequirementStatus) -> Result<(), McpError> {
+        async fn track_requirement_status_change(
+            &self,
+            _requirement_id: &str,
+            _old_status: RequirementStatus,
+            _new_status: RequirementStatus,
+        ) -> Result<(), McpError> {
             Ok(())
         }
     }
@@ -397,7 +497,10 @@ mod tests {
             "project_id": "test-project"
         });
 
-        let result = tools.handle_track_requirements_progress(arguments).await.unwrap();
+        let result = tools
+            .handle_track_requirements_progress(arguments)
+            .await
+            .unwrap();
         assert!(result.is_error.is_none() || !result.is_error.unwrap());
         assert!(!result.content.is_empty());
     }
@@ -425,7 +528,10 @@ mod tests {
             "project_id": "test-project"
         });
 
-        let result = tools.handle_analyze_specification_completeness(arguments).await.unwrap();
+        let result = tools
+            .handle_analyze_specification_completeness(arguments)
+            .await
+            .unwrap();
         assert!(result.is_error.is_none() || !result.is_error.unwrap());
         assert!(!result.content.is_empty());
     }
@@ -440,7 +546,10 @@ mod tests {
             "days": 30
         });
 
-        let result = tools.handle_calculate_development_velocity(arguments).await.unwrap();
+        let result = tools
+            .handle_calculate_development_velocity(arguments)
+            .await
+            .unwrap();
         assert!(result.is_error.is_none() || !result.is_error.unwrap());
         assert!(!result.content.is_empty());
     }
@@ -454,7 +563,10 @@ mod tests {
             "project_id": "test-project"
         });
 
-        let result = tools.handle_generate_specification_health_report(arguments).await.unwrap();
+        let result = tools
+            .handle_generate_specification_health_report(arguments)
+            .await
+            .unwrap();
         assert!(result.is_error.is_none() || !result.is_error.unwrap());
         assert!(!result.content.is_empty());
     }
@@ -488,7 +600,7 @@ mod tests {
     fn test_get_tools() {
         let tools = SpecificationAnalyticsTools::get_tools();
         assert_eq!(tools.len(), 5);
-        
+
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(tool_names.contains(&"track_requirements_progress"));
         assert!(tool_names.contains(&"track_tasks_progress"));

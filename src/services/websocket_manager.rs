@@ -56,7 +56,7 @@ impl WebSocketManager {
     /// Create a new WebSocket manager
     pub fn new() -> Self {
         let (change_broadcaster, _) = broadcast::channel(1000);
-        
+
         Self {
             connections: Arc::new(DashMap::new()),
             change_broadcaster,
@@ -68,24 +68,21 @@ impl WebSocketManager {
     /// Start the WebSocket manager with health monitoring
     pub async fn start(&self) -> Result<()> {
         info!("Starting WebSocket manager");
-        
+
         // Start health monitoring task
         self.start_health_monitoring().await;
-        
+
         // Start message queue processing
         self.start_queue_processing().await;
-        
+
         Ok(())
     }
 
     /// Handle a new WebSocket connection
-    pub async fn handle_connection(
-        &self,
-        stream: tokio::net::TcpStream,
-    ) -> Result<()> {
+    pub async fn handle_connection(&self, stream: tokio::net::TcpStream) -> Result<()> {
         let ws_stream = accept_async(stream).await?;
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-        
+
         let client_id = Uuid::new_v4();
         info!("New WebSocket connection: {}", client_id);
 
@@ -105,7 +102,10 @@ impl WebSocketManager {
                 };
 
                 if let Err(e) = ws_sender.send(Message::Text(json_message)).await {
-                    error!("Failed to send message to client {}: {}", client_id_clone, e);
+                    error!(
+                        "Failed to send message to client {}: {}",
+                        client_id_clone, e
+                    );
                     break;
                 }
             }
@@ -136,10 +136,15 @@ impl WebSocketManager {
                                     &change_broadcaster,
                                     &message_queue,
                                     &health_monitor,
-                                ).await {
-                                    Ok(_) => {},
+                                )
+                                .await
+                                {
+                                    Ok(_) => {}
                                     Err(e) => {
-                                        error!("Error handling message from client {}: {}", client_id, e);
+                                        error!(
+                                            "Error handling message from client {}: {}",
+                                            client_id, e
+                                        );
                                         let error_msg = WebSocketMessage::Error {
                                             code: "MESSAGE_ERROR".to_string(),
                                             message: e.to_string(),
@@ -195,10 +200,14 @@ impl WebSocketManager {
         health_monitor: &Arc<DashMap<ClientId, ConnectionHealth>>,
     ) -> Result<()> {
         match message {
-            WebSocketMessage::Auth { token: _, project_id, client_info } => {
+            WebSocketMessage::Auth {
+                token: _,
+                project_id,
+                client_info,
+            } => {
                 // Simple authentication - in production, validate token
                 *authenticated = true;
-                
+
                 let connection = ClientConnection {
                     client_id,
                     project_id: project_id.clone(),
@@ -210,15 +219,20 @@ impl WebSocketManager {
                 };
 
                 connections.insert(client_id, connection);
-                *client_connection = connections.get(&client_id).map(|entry| entry.value().clone());
+                *client_connection = connections
+                    .get(&client_id)
+                    .map(|entry| entry.value().clone());
 
                 // Initialize health monitoring
-                health_monitor.insert(client_id, ConnectionHealth {
-                    last_ping: Utc::now(),
-                    last_pong: Utc::now(),
-                    missed_pings: 0,
-                    is_healthy: true,
-                });
+                health_monitor.insert(
+                    client_id,
+                    ConnectionHealth {
+                        last_ping: Utc::now(),
+                        last_pong: Utc::now(),
+                        missed_pings: 0,
+                        is_healthy: true,
+                    },
+                );
 
                 // Initialize message queue
                 message_queue.insert(client_id, Vec::new());
@@ -230,7 +244,10 @@ impl WebSocketManager {
                 };
                 message_sender.send(response)?;
 
-                info!("Client {} authenticated for project {}", client_id, project_id);
+                info!(
+                    "Client {} authenticated for project {}",
+                    client_id, project_id
+                );
             }
 
             WebSocketMessage::Subscribe { filters } => {
@@ -304,7 +321,9 @@ impl WebSocketManager {
             let client_connection = connection.value();
 
             // Check if client is subscribed to this change
-            let should_send = client_connection.subscriptions.iter()
+            let should_send = client_connection
+                .subscriptions
+                .iter()
                 .any(|filter| filter.matches(&change));
 
             if should_send {
@@ -316,7 +335,11 @@ impl WebSocketManager {
                 };
 
                 // Try to send immediately
-                if client_connection.message_sender.send(message.clone()).is_err() {
+                if client_connection
+                    .message_sender
+                    .send(message.clone())
+                    .is_err()
+                {
                     // If immediate send fails, queue the message
                     self.queue_message(client_id, message_id, message).await;
                 }
@@ -330,7 +353,12 @@ impl WebSocketManager {
     }
 
     /// Queue a message for reliable delivery
-    async fn queue_message(&self, client_id: ClientId, message_id: MessageId, message: WebSocketMessage) {
+    async fn queue_message(
+        &self,
+        client_id: ClientId,
+        message_id: MessageId,
+        message: WebSocketMessage,
+    ) {
         if let Some(mut queue) = self.message_queue.get_mut(&client_id) {
             queue.push(QueuedMessage {
                 message_id,
@@ -345,7 +373,9 @@ impl WebSocketManager {
     pub async fn get_connection_status(&self, client_id: ClientId) -> Option<ConnectionStatus> {
         let connection = self.connections.get(&client_id)?;
         let health = self.health_monitor.get(&client_id)?;
-        let queue_size = self.message_queue.get(&client_id)
+        let queue_size = self
+            .message_queue
+            .get(&client_id)
             .map(|queue| queue.len())
             .unwrap_or(0);
 
@@ -362,11 +392,15 @@ impl WebSocketManager {
 
     /// Get sync status for a project
     pub async fn get_sync_status(&self, project_id: &str) -> SyncStatus {
-        let connected_clients = self.connections.iter()
+        let connected_clients = self
+            .connections
+            .iter()
             .filter(|entry| entry.value().project_id == project_id)
             .count() as u32;
 
-        let pending_changes = self.message_queue.iter()
+        let pending_changes = self
+            .message_queue
+            .iter()
             .map(|entry| entry.value().len())
             .sum::<usize>() as u32;
 
@@ -419,9 +453,7 @@ impl WebSocketManager {
 
                     // Send ping to check connectivity
                     if let Some(connection) = connections.get(&client_id) {
-                        let ping = WebSocketMessage::Ping {
-                            timestamp: now,
-                        };
+                        let ping = WebSocketMessage::Ping { timestamp: now };
                         let _ = connection.message_sender.send(ping);
                     }
                 }
@@ -456,16 +488,22 @@ impl WebSocketManager {
 
                         for (index, queued_msg) in queue.iter_mut().enumerate() {
                             // Retry sending the message
-                            if connection.message_sender.send(queued_msg.message.clone()).is_ok() {
+                            if connection
+                                .message_sender
+                                .send(queued_msg.message.clone())
+                                .is_ok()
+                            {
                                 to_remove.push(index);
                             } else {
                                 queued_msg.retry_count += 1;
-                                
+
                                 // Remove messages that have been retried too many times
                                 if queued_msg.retry_count > 5 {
                                     to_remove.push(index);
-                                    warn!("Dropping message {} for client {} after {} retries", 
-                                          queued_msg.message_id, client_id, queued_msg.retry_count);
+                                    warn!(
+                                        "Dropping message {} for client {} after {} retries",
+                                        queued_msg.message_id, client_id, queued_msg.retry_count
+                                    );
                                 }
                             }
                         }

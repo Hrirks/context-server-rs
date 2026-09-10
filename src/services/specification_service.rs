@@ -1,4 +1,4 @@
-use crate::models::specification::{ProjectSpecification, Requirement, Task, SpecType};
+use crate::models::specification::{ProjectSpecification, Requirement, SpecType, Task};
 use crate::repositories::SpecificationRepository;
 use crate::services::SpecificationParser;
 use anyhow::{anyhow, Result};
@@ -15,23 +15,49 @@ pub trait SpecificationService: Send + Sync {
         file_path: &str,
         content: &str,
     ) -> Result<ProjectSpecification, McpError>;
-    
+
     async fn get_specification(&self, id: &str) -> Result<Option<ProjectSpecification>, McpError>;
-    async fn get_specifications_by_project(&self, project_id: &str) -> Result<Vec<ProjectSpecification>, McpError>;
-    async fn get_specifications_by_type(&self, project_id: &str, spec_type: SpecType) -> Result<Vec<ProjectSpecification>, McpError>;
-    async fn update_specification(&self, spec: ProjectSpecification) -> Result<ProjectSpecification, McpError>;
+    async fn get_specifications_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectSpecification>, McpError>;
+    async fn get_specifications_by_type(
+        &self,
+        project_id: &str,
+        spec_type: SpecType,
+    ) -> Result<Vec<ProjectSpecification>, McpError>;
+    async fn update_specification(
+        &self,
+        spec: ProjectSpecification,
+    ) -> Result<ProjectSpecification, McpError>;
     async fn delete_specification(&self, id: &str) -> Result<bool, McpError>;
-    
+
     async fn get_requirements_by_spec(&self, spec_id: &str) -> Result<Vec<Requirement>, McpError>;
     async fn get_tasks_by_spec(&self, spec_id: &str) -> Result<Vec<Task>, McpError>;
-    async fn get_tasks_by_status(&self, spec_id: &str, status: &str) -> Result<Vec<Task>, McpError>;
-    
-    async fn link_requirement_to_context(&self, requirement_id: &str, context_id: &str) -> Result<(), McpError>;
+    async fn get_tasks_by_status(&self, spec_id: &str, status: &str)
+        -> Result<Vec<Task>, McpError>;
+
+    async fn link_requirement_to_context(
+        &self,
+        requirement_id: &str,
+        context_id: &str,
+    ) -> Result<(), McpError>;
     async fn link_task_to_context(&self, task_id: &str, context_id: &str) -> Result<(), McpError>;
-    async fn link_task_to_requirement(&self, task_id: &str, requirement_id: &str) -> Result<(), McpError>;
-    
-    async fn validate_specification(&self, spec: &ProjectSpecification) -> Result<Vec<String>, McpError>;
-    async fn sync_specification_with_file(&self, spec_id: &str, file_content: &str) -> Result<ProjectSpecification, McpError>;
+    async fn link_task_to_requirement(
+        &self,
+        task_id: &str,
+        requirement_id: &str,
+    ) -> Result<(), McpError>;
+
+    async fn validate_specification(
+        &self,
+        spec: &ProjectSpecification,
+    ) -> Result<Vec<String>, McpError>;
+    async fn sync_specification_with_file(
+        &self,
+        spec_id: &str,
+        file_content: &str,
+    ) -> Result<ProjectSpecification, McpError>;
 }
 
 /// Default implementation of SpecificationService
@@ -55,11 +81,15 @@ impl SpecificationService for DefaultSpecificationService {
     ) -> Result<ProjectSpecification, McpError> {
         // Parse the specification
         let mut spec = SpecificationParser::parse_specification(project_id, file_path, content)
-            .map_err(|e| McpError::internal_error(format!("Failed to parse specification: {}", e), None))?;
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to parse specification: {}", e), None)
+            })?;
 
         // Validate the specification
-        let validation_issues = SpecificationParser::validate_specification(&spec)
-            .map_err(|e| McpError::internal_error(format!("Failed to validate specification: {}", e), None))?;
+        let validation_issues =
+            SpecificationParser::validate_specification(&spec).map_err(|e| {
+                McpError::internal_error(format!("Failed to validate specification: {}", e), None)
+            })?;
 
         if !validation_issues.is_empty() {
             tracing::warn!("Specification validation issues: {:?}", validation_issues);
@@ -70,8 +100,14 @@ impl SpecificationService for DefaultSpecificationService {
 
         // Parse and store requirements if this is a requirements spec
         if spec.spec_type == SpecType::Requirements {
-            let requirements = SpecificationParser::parse_requirements_from_markdown(content, spec.id.clone())
-                .map_err(|e| McpError::internal_error(format!("Failed to parse requirements: {}", e), None))?;
+            let requirements =
+                SpecificationParser::parse_requirements_from_markdown(content, spec.id.clone())
+                    .map_err(|e| {
+                        McpError::internal_error(
+                            format!("Failed to parse requirements: {}", e),
+                            None,
+                        )
+                    })?;
 
             for requirement in requirements {
                 let stored_req = self.repository.create_requirement(&requirement).await?;
@@ -82,7 +118,9 @@ impl SpecificationService for DefaultSpecificationService {
         // Parse and store tasks if this is a tasks spec
         if spec.spec_type == SpecType::Tasks {
             let tasks = SpecificationParser::parse_tasks_from_markdown(content, spec.id.clone())
-                .map_err(|e| McpError::internal_error(format!("Failed to parse tasks: {}", e), None))?;
+                .map_err(|e| {
+                    McpError::internal_error(format!("Failed to parse tasks: {}", e), None)
+                })?;
 
             for task in tasks {
                 let stored_task = self.repository.create_task(&task).await?;
@@ -115,8 +153,14 @@ impl SpecificationService for DefaultSpecificationService {
         Ok(Some(spec))
     }
 
-    async fn get_specifications_by_project(&self, project_id: &str) -> Result<Vec<ProjectSpecification>, McpError> {
-        let mut specifications = self.repository.find_specifications_by_project(project_id).await?;
+    async fn get_specifications_by_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectSpecification>, McpError> {
+        let mut specifications = self
+            .repository
+            .find_specifications_by_project(project_id)
+            .await?;
 
         // Load requirements and tasks for each specification
         for spec in &mut specifications {
@@ -130,8 +174,15 @@ impl SpecificationService for DefaultSpecificationService {
         Ok(specifications)
     }
 
-    async fn get_specifications_by_type(&self, project_id: &str, spec_type: SpecType) -> Result<Vec<ProjectSpecification>, McpError> {
-        let mut specifications = self.repository.find_specifications_by_type(project_id, spec_type.as_str()).await?;
+    async fn get_specifications_by_type(
+        &self,
+        project_id: &str,
+        spec_type: SpecType,
+    ) -> Result<Vec<ProjectSpecification>, McpError> {
+        let mut specifications = self
+            .repository
+            .find_specifications_by_type(project_id, spec_type.as_str())
+            .await?;
 
         // Load requirements and tasks for each specification
         for spec in &mut specifications {
@@ -145,7 +196,10 @@ impl SpecificationService for DefaultSpecificationService {
         Ok(specifications)
     }
 
-    async fn update_specification(&self, spec: ProjectSpecification) -> Result<ProjectSpecification, McpError> {
+    async fn update_specification(
+        &self,
+        spec: ProjectSpecification,
+    ) -> Result<ProjectSpecification, McpError> {
         self.repository.update_specification(&spec).await
     }
 
@@ -161,43 +215,85 @@ impl SpecificationService for DefaultSpecificationService {
         self.repository.find_tasks_by_spec(spec_id).await
     }
 
-    async fn get_tasks_by_status(&self, spec_id: &str, status: &str) -> Result<Vec<Task>, McpError> {
+    async fn get_tasks_by_status(
+        &self,
+        spec_id: &str,
+        status: &str,
+    ) -> Result<Vec<Task>, McpError> {
         self.repository.find_tasks_by_status(spec_id, status).await
     }
 
-    async fn link_requirement_to_context(&self, requirement_id: &str, context_id: &str) -> Result<(), McpError> {
-        self.repository.link_requirement_to_context(requirement_id, context_id).await
+    async fn link_requirement_to_context(
+        &self,
+        requirement_id: &str,
+        context_id: &str,
+    ) -> Result<(), McpError> {
+        self.repository
+            .link_requirement_to_context(requirement_id, context_id)
+            .await
     }
 
     async fn link_task_to_context(&self, task_id: &str, context_id: &str) -> Result<(), McpError> {
-        self.repository.link_task_to_context(task_id, context_id).await
+        self.repository
+            .link_task_to_context(task_id, context_id)
+            .await
     }
 
-    async fn link_task_to_requirement(&self, task_id: &str, requirement_id: &str) -> Result<(), McpError> {
-        self.repository.link_task_to_requirement(task_id, requirement_id).await
+    async fn link_task_to_requirement(
+        &self,
+        task_id: &str,
+        requirement_id: &str,
+    ) -> Result<(), McpError> {
+        self.repository
+            .link_task_to_requirement(task_id, requirement_id)
+            .await
     }
 
-    async fn validate_specification(&self, spec: &ProjectSpecification) -> Result<Vec<String>, McpError> {
-        SpecificationParser::validate_specification(spec)
-            .map_err(|e| McpError::internal_error(format!("Failed to validate specification: {}", e), None))
+    async fn validate_specification(
+        &self,
+        spec: &ProjectSpecification,
+    ) -> Result<Vec<String>, McpError> {
+        SpecificationParser::validate_specification(spec).map_err(|e| {
+            McpError::internal_error(format!("Failed to validate specification: {}", e), None)
+        })
     }
 
-    async fn sync_specification_with_file(&self, spec_id: &str, file_content: &str) -> Result<ProjectSpecification, McpError> {
-        let mut spec = self.repository.find_specification_by_id(spec_id).await?
-            .ok_or_else(|| McpError::resource_not_found(format!("Specification not found: {}", spec_id), None))?;
+    async fn sync_specification_with_file(
+        &self,
+        spec_id: &str,
+        file_content: &str,
+    ) -> Result<ProjectSpecification, McpError> {
+        let mut spec = self
+            .repository
+            .find_specification_by_id(spec_id)
+            .await?
+            .ok_or_else(|| {
+                McpError::resource_not_found(format!("Specification not found: {}", spec_id), None)
+            })?;
 
         // Parse the new content
         let file_path = spec.file_path.as_deref().unwrap_or("unknown");
-        let parsed_spec = SpecificationParser::parse_specification(spec.project_id.clone(), file_path, file_content)
-            .map_err(|e| McpError::internal_error(format!("Failed to parse specification: {}", e), None))?;
+        let parsed_spec = SpecificationParser::parse_specification(
+            spec.project_id.clone(),
+            file_path,
+            file_content,
+        )
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to parse specification: {}", e), None)
+        })?;
 
         // Update the specification content
         spec.update_content(parsed_spec.content);
 
         // If this is a requirements spec, sync requirements
         if spec.spec_type == SpecType::Requirements {
-            let new_requirements = SpecificationParser::parse_requirements_from_markdown(file_content, spec.id.clone())
-                .map_err(|e| McpError::internal_error(format!("Failed to parse requirements: {}", e), None))?;
+            let new_requirements = SpecificationParser::parse_requirements_from_markdown(
+                file_content,
+                spec.id.clone(),
+            )
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to parse requirements: {}", e), None)
+            })?;
 
             // For simplicity, we'll replace all requirements
             // In a production system, you might want to do a more sophisticated merge
@@ -215,8 +311,11 @@ impl SpecificationService for DefaultSpecificationService {
 
         // If this is a tasks spec, sync tasks
         if spec.spec_type == SpecType::Tasks {
-            let new_tasks = SpecificationParser::parse_tasks_from_markdown(file_content, spec.id.clone())
-                .map_err(|e| McpError::internal_error(format!("Failed to parse tasks: {}", e), None))?;
+            let new_tasks =
+                SpecificationParser::parse_tasks_from_markdown(file_content, spec.id.clone())
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Failed to parse tasks: {}", e), None)
+                    })?;
 
             // For simplicity, we'll replace all tasks
             // In a production system, you might want to do a more sophisticated merge
@@ -250,23 +349,39 @@ mod tests {
 
     #[async_trait]
     impl SpecificationRepository for MockSpecificationRepository {
-        async fn create_specification(&self, spec: &ProjectSpecification) -> Result<ProjectSpecification, McpError> {
+        async fn create_specification(
+            &self,
+            spec: &ProjectSpecification,
+        ) -> Result<ProjectSpecification, McpError> {
             Ok(spec.clone())
         }
 
-        async fn find_specification_by_id(&self, _id: &str) -> Result<Option<ProjectSpecification>, McpError> {
+        async fn find_specification_by_id(
+            &self,
+            _id: &str,
+        ) -> Result<Option<ProjectSpecification>, McpError> {
             Ok(None)
         }
 
-        async fn find_specifications_by_project(&self, _project_id: &str) -> Result<Vec<ProjectSpecification>, McpError> {
+        async fn find_specifications_by_project(
+            &self,
+            _project_id: &str,
+        ) -> Result<Vec<ProjectSpecification>, McpError> {
             Ok(Vec::new())
         }
 
-        async fn find_specifications_by_type(&self, _project_id: &str, _spec_type: &str) -> Result<Vec<ProjectSpecification>, McpError> {
+        async fn find_specifications_by_type(
+            &self,
+            _project_id: &str,
+            _spec_type: &str,
+        ) -> Result<Vec<ProjectSpecification>, McpError> {
             Ok(Vec::new())
         }
 
-        async fn update_specification(&self, spec: &ProjectSpecification) -> Result<ProjectSpecification, McpError> {
+        async fn update_specification(
+            &self,
+            spec: &ProjectSpecification,
+        ) -> Result<ProjectSpecification, McpError> {
             Ok(spec.clone())
         }
 
@@ -274,7 +389,10 @@ mod tests {
             Ok(true)
         }
 
-        async fn create_requirement(&self, requirement: &Requirement) -> Result<Requirement, McpError> {
+        async fn create_requirement(
+            &self,
+            requirement: &Requirement,
+        ) -> Result<Requirement, McpError> {
             Ok(requirement.clone())
         }
 
@@ -282,11 +400,17 @@ mod tests {
             Ok(None)
         }
 
-        async fn find_requirements_by_spec(&self, _spec_id: &str) -> Result<Vec<Requirement>, McpError> {
+        async fn find_requirements_by_spec(
+            &self,
+            _spec_id: &str,
+        ) -> Result<Vec<Requirement>, McpError> {
             Ok(Vec::new())
         }
 
-        async fn update_requirement(&self, requirement: &Requirement) -> Result<Requirement, McpError> {
+        async fn update_requirement(
+            &self,
+            requirement: &Requirement,
+        ) -> Result<Requirement, McpError> {
             Ok(requirement.clone())
         }
 
@@ -306,7 +430,11 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn find_tasks_by_status(&self, _spec_id: &str, _status: &str) -> Result<Vec<Task>, McpError> {
+        async fn find_tasks_by_status(
+            &self,
+            _spec_id: &str,
+            _status: &str,
+        ) -> Result<Vec<Task>, McpError> {
             Ok(Vec::new())
         }
 
@@ -318,27 +446,51 @@ mod tests {
             Ok(true)
         }
 
-        async fn link_requirement_to_context(&self, _requirement_id: &str, _context_id: &str) -> Result<(), McpError> {
+        async fn link_requirement_to_context(
+            &self,
+            _requirement_id: &str,
+            _context_id: &str,
+        ) -> Result<(), McpError> {
             Ok(())
         }
 
-        async fn link_task_to_context(&self, _task_id: &str, _context_id: &str) -> Result<(), McpError> {
+        async fn link_task_to_context(
+            &self,
+            _task_id: &str,
+            _context_id: &str,
+        ) -> Result<(), McpError> {
             Ok(())
         }
 
-        async fn link_task_to_requirement(&self, _task_id: &str, _requirement_id: &str) -> Result<(), McpError> {
+        async fn link_task_to_requirement(
+            &self,
+            _task_id: &str,
+            _requirement_id: &str,
+        ) -> Result<(), McpError> {
             Ok(())
         }
 
-        async fn unlink_requirement_from_context(&self, _requirement_id: &str, _context_id: &str) -> Result<(), McpError> {
+        async fn unlink_requirement_from_context(
+            &self,
+            _requirement_id: &str,
+            _context_id: &str,
+        ) -> Result<(), McpError> {
             Ok(())
         }
 
-        async fn unlink_task_from_context(&self, _task_id: &str, _context_id: &str) -> Result<(), McpError> {
+        async fn unlink_task_from_context(
+            &self,
+            _task_id: &str,
+            _context_id: &str,
+        ) -> Result<(), McpError> {
             Ok(())
         }
 
-        async fn unlink_task_from_requirement(&self, _task_id: &str, _requirement_id: &str) -> Result<(), McpError> {
+        async fn unlink_task_from_requirement(
+            &self,
+            _task_id: &str,
+            _requirement_id: &str,
+        ) -> Result<(), McpError> {
             Ok(())
         }
     }
@@ -358,11 +510,9 @@ This is a test specification.
 This section contains the overview.
 "#;
 
-        let result = service.import_specification_from_file(
-            "test-project".to_string(),
-            "test.md",
-            content,
-        ).await;
+        let result = service
+            .import_specification_from_file("test-project".to_string(), "test.md", content)
+            .await;
 
         assert!(result.is_ok());
         let spec = result.unwrap();
@@ -379,7 +529,10 @@ This section contains the overview.
             "test".to_string(),
             SpecType::Requirements,
             "Test Spec".to_string(),
-            SpecContent::new(SpecFormat::Markdown, "# Test\n\nRequirement 1\n\nAcceptance Criteria".to_string()),
+            SpecContent::new(
+                SpecFormat::Markdown,
+                "# Test\n\nRequirement 1\n\nAcceptance Criteria".to_string(),
+            ),
         );
 
         let result = service.validate_specification(&spec).await;

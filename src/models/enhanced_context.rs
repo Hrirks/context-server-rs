@@ -215,7 +215,10 @@ impl RelationshipType {
     }
 
     pub fn is_bidirectional(&self) -> bool {
-        matches!(self, RelationshipType::Similar | RelationshipType::Conflicts)
+        matches!(
+            self,
+            RelationshipType::Similar | RelationshipType::Conflicts
+        )
     }
 }
 
@@ -363,7 +366,8 @@ impl UsageStatistics {
             self.average_relevance_score = new_score;
         } else {
             let total_score = self.average_relevance_score * (self.successful_queries - 1) as f64;
-            self.average_relevance_score = (total_score + new_score) / self.successful_queries as f64;
+            self.average_relevance_score =
+                (total_score + new_score) / self.successful_queries as f64;
         }
     }
 
@@ -474,7 +478,7 @@ impl QualityMetrics {
             self.relevance_score,
             self.freshness_score,
         ];
-        
+
         self.overall_score = scores.iter().sum::<f64>() / scores.len() as f64;
         self.calculated_at = Utc::now();
     }

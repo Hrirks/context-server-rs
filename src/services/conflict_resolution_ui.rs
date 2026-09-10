@@ -1,6 +1,8 @@
-use crate::services::conflict_resolution_engine::{ConflictInfo, ConflictType, ManualResolutionRequest, ConflictResolutionResult};
-use crate::services::websocket_types::{ConflictStrategy, ClientId};
-use anyhow::{Result, anyhow};
+use crate::services::conflict_resolution_engine::{
+    ConflictInfo, ConflictResolutionResult, ConflictType, ManualResolutionRequest,
+};
+use crate::services::websocket_types::{ClientId, ConflictStrategy};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -197,8 +199,11 @@ impl ConflictResolutionUI {
         conflict_info: ConflictInfo,
     ) -> Result<StartResolutionResponse> {
         let session_id = Uuid::new_v4().to_string();
-        
-        debug!("Starting conflict resolution session {} for conflict {}", session_id, request.conflict_id);
+
+        debug!(
+            "Starting conflict resolution session {} for conflict {}",
+            session_id, request.conflict_id
+        );
 
         // Create initial UI state
         let ui_state = ConflictUIState {
@@ -216,9 +221,9 @@ impl ConflictResolutionUI {
         };
 
         // Calculate timeout
-        let timeout_at = request.timeout_seconds.map(|seconds| {
-            Utc::now() + chrono::Duration::seconds(seconds as i64)
-        });
+        let timeout_at = request
+            .timeout_seconds
+            .map(|seconds| Utc::now() + chrono::Duration::seconds(seconds as i64));
 
         // Create session
         let session = ConflictResolutionSession {
@@ -257,16 +262,21 @@ impl ConflictResolutionUI {
     ) -> Result<UpdateUIStateResponse> {
         // First, get the session data we need for validation and component generation
         let conflict_info = {
-            let session = self.active_sessions
+            let session = self
+                .active_sessions
                 .get(&request.session_id)
                 .ok_or_else(|| anyhow!("Session not found: {}", request.session_id))?;
             session.conflict_info.clone()
         };
 
-        debug!("Updating UI state for session {} to step {:?}", request.session_id, request.step);
+        debug!(
+            "Updating UI state for session {} to step {:?}",
+            request.session_id, request.step
+        );
 
         // Now get mutable access to update the session
-        let session = self.active_sessions
+        let session = self
+            .active_sessions
             .get_mut(&request.session_id)
             .ok_or_else(|| anyhow!("Session not found: {}", request.session_id))?;
 
@@ -275,8 +285,11 @@ impl ConflictResolutionUI {
 
         // Update UI state
         session.ui_state.current_step = request.step.clone();
-        session.ui_state.user_selections.extend(request.user_selections);
-        
+        session
+            .ui_state
+            .user_selections
+            .extend(request.user_selections);
+
         if let Some(strategy) = request.selected_strategy {
             session.ui_state.selected_strategy = Some(strategy);
         }
@@ -296,11 +309,16 @@ impl ConflictResolutionUI {
         )?;
 
         // Check if can proceed
-        let can_proceed = validation_errors.iter().all(|e| e.severity != ValidationSeverity::Error);
+        let can_proceed = validation_errors
+            .iter()
+            .all(|e| e.severity != ValidationSeverity::Error);
 
         // Generate preview if in preview step
         if request.step == ConflictResolutionStep::PreviewConfirmation {
-            session.ui_state.preview_entity = Some(Self::generate_preview_entity_static(&session.ui_state, &conflict_info)?);
+            session.ui_state.preview_entity = Some(Self::generate_preview_entity_static(
+                &session.ui_state,
+                &conflict_info,
+            )?);
         }
 
         Ok(UpdateUIStateResponse {
@@ -318,28 +336,33 @@ impl ConflictResolutionUI {
         session_id: &str,
         resolution_notes: Option<String>,
     ) -> Result<ManualResolutionRequest> {
-        let session = self.active_sessions
+        let session = self
+            .active_sessions
             .get_mut(session_id)
             .ok_or_else(|| anyhow!("Session not found: {}", session_id))?;
 
         info!("Completing conflict resolution session {}", session_id);
 
         // Validate final state
-        let validation_errors = Self::validate_ui_state_static(&session.ui_state, &session.conflict_info)?;
-        if validation_errors.iter().any(|e| e.severity == ValidationSeverity::Error) {
+        let validation_errors =
+            Self::validate_ui_state_static(&session.ui_state, &session.conflict_info)?;
+        if validation_errors
+            .iter()
+            .any(|e| e.severity == ValidationSeverity::Error)
+        {
             return Err(anyhow!("Cannot complete resolution with validation errors"));
         }
 
         // Get selected strategy
-        let strategy = session.ui_state.selected_strategy
+        let strategy = session
+            .ui_state
+            .selected_strategy
             .clone()
             .unwrap_or(ConflictStrategy::LastWriterWins);
 
         // Generate resolved entity based on user selections and strategy
         let resolved_entity = match strategy {
-            ConflictStrategy::ManualResolution => {
-                session.ui_state.preview_entity.clone()
-            }
+            ConflictStrategy::ManualResolution => session.ui_state.preview_entity.clone(),
             ConflictStrategy::LastWriterWins => {
                 // For LastWriterWins, generate the resolved entity from the latest change
                 Self::generate_preview_entity_static(&session.ui_state, &session.conflict_info).ok()
@@ -396,7 +419,10 @@ impl ConflictResolutionUI {
     }
 
     /// Get available strategies for a conflict
-    fn get_available_strategies(&self, conflict_info: &ConflictInfo) -> Vec<ConflictStrategyOption> {
+    fn get_available_strategies(
+        &self,
+        conflict_info: &ConflictInfo,
+    ) -> Vec<ConflictStrategyOption> {
         let mut strategies = vec![
             ConflictStrategyOption {
                 strategy: ConflictStrategy::LastWriterWins,
@@ -428,7 +454,9 @@ impl ConflictResolutionUI {
         ];
 
         // Add manual resolution for complex conflicts
-        if conflict_info.conflicting_changes.len() > 1 || conflict_info.conflict_type == ConflictType::SemanticConflict {
+        if conflict_info.conflicting_changes.len() > 1
+            || conflict_info.conflict_type == ConflictType::SemanticConflict
+        {
             strategies.push(ConflictStrategyOption {
                 strategy: ConflictStrategy::ManualResolution,
                 name: "Manual Resolution".to_string(),
@@ -505,88 +533,80 @@ impl ConflictResolutionUI {
         ui_state: &ConflictUIState,
     ) -> Result<Vec<UIComponent>> {
         match step {
-            ConflictResolutionStep::StrategySelection => {
-                Ok(vec![
-                    UIComponent {
-                        component_type: UIComponentType::StrategySelector,
-                        id: "strategy-selector".to_string(),
-                        title: "Resolution Strategy".to_string(),
-                        description: Some("Choose how to resolve this conflict".to_string()),
-                        data: serde_json::json!({
-                            "strategies": self.get_available_strategies(conflict_info),
-                            "recommended": self.recommend_strategy(conflict_info)
-                        }),
-                        validation_rules: vec![
-                            ValidationRule {
-                                rule_type: ValidationType::Required,
-                                message: "Please select a resolution strategy".to_string(),
-                                parameters: HashMap::new(),
-                            }
-                        ],
-                        is_required: true,
-                    }
-                ])
-            }
-            ConflictResolutionStep::ManualResolution => {
-                Ok(vec![
-                    UIComponent {
-                        component_type: UIComponentType::EntityEditor,
-                        id: "entity-editor".to_string(),
-                        title: "Manual Resolution".to_string(),
-                        description: Some("Edit the entity to resolve conflicts".to_string()),
-                        data: serde_json::json!({
-                            "conflicting_changes": conflict_info.conflicting_changes,
-                            "current_selections": ui_state.user_selections
-                        }),
-                        validation_rules: vec![
-                            ValidationRule {
-                                rule_type: ValidationType::Required,
-                                message: "Please provide a resolved entity".to_string(),
-                                parameters: HashMap::new(),
-                            }
-                        ],
-                        is_required: true,
-                    },
-                    UIComponent {
-                        component_type: UIComponentType::FieldMerger,
-                        id: "field-merger".to_string(),
-                        title: "Field-by-Field Merge".to_string(),
-                        description: Some("Choose values for each conflicting field".to_string()),
-                        data: serde_json::json!({
-                            "conflicting_fields": self.extract_conflicting_fields(&conflict_info.conflicting_changes)
-                        }),
-                        validation_rules: Vec::new(),
-                        is_required: false,
-                    }
-                ])
-            }
-            ConflictResolutionStep::PreviewConfirmation => {
-                Ok(vec![
-                    UIComponent {
-                        component_type: UIComponentType::PreviewPanel,
-                        id: "preview-panel".to_string(),
-                        title: "Resolution Preview".to_string(),
-                        description: Some("Review the resolved entity before applying".to_string()),
-                        data: serde_json::json!({
-                            "preview_entity": ui_state.preview_entity,
-                            "strategy": ui_state.selected_strategy,
-                            "discarded_changes": self.calculate_discarded_changes(ui_state, conflict_info)
-                        }),
-                        validation_rules: Vec::new(),
-                        is_required: false,
-                    }
-                ])
-            }
+            ConflictResolutionStep::StrategySelection => Ok(vec![UIComponent {
+                component_type: UIComponentType::StrategySelector,
+                id: "strategy-selector".to_string(),
+                title: "Resolution Strategy".to_string(),
+                description: Some("Choose how to resolve this conflict".to_string()),
+                data: serde_json::json!({
+                    "strategies": self.get_available_strategies(conflict_info),
+                    "recommended": self.recommend_strategy(conflict_info)
+                }),
+                validation_rules: vec![ValidationRule {
+                    rule_type: ValidationType::Required,
+                    message: "Please select a resolution strategy".to_string(),
+                    parameters: HashMap::new(),
+                }],
+                is_required: true,
+            }]),
+            ConflictResolutionStep::ManualResolution => Ok(vec![
+                UIComponent {
+                    component_type: UIComponentType::EntityEditor,
+                    id: "entity-editor".to_string(),
+                    title: "Manual Resolution".to_string(),
+                    description: Some("Edit the entity to resolve conflicts".to_string()),
+                    data: serde_json::json!({
+                        "conflicting_changes": conflict_info.conflicting_changes,
+                        "current_selections": ui_state.user_selections
+                    }),
+                    validation_rules: vec![ValidationRule {
+                        rule_type: ValidationType::Required,
+                        message: "Please provide a resolved entity".to_string(),
+                        parameters: HashMap::new(),
+                    }],
+                    is_required: true,
+                },
+                UIComponent {
+                    component_type: UIComponentType::FieldMerger,
+                    id: "field-merger".to_string(),
+                    title: "Field-by-Field Merge".to_string(),
+                    description: Some("Choose values for each conflicting field".to_string()),
+                    data: serde_json::json!({
+                        "conflicting_fields": self.extract_conflicting_fields(&conflict_info.conflicting_changes)
+                    }),
+                    validation_rules: Vec::new(),
+                    is_required: false,
+                },
+            ]),
+            ConflictResolutionStep::PreviewConfirmation => Ok(vec![UIComponent {
+                component_type: UIComponentType::PreviewPanel,
+                id: "preview-panel".to_string(),
+                title: "Resolution Preview".to_string(),
+                description: Some("Review the resolved entity before applying".to_string()),
+                data: serde_json::json!({
+                    "preview_entity": ui_state.preview_entity,
+                    "strategy": ui_state.selected_strategy,
+                    "discarded_changes": self.calculate_discarded_changes(ui_state, conflict_info)
+                }),
+                validation_rules: Vec::new(),
+                is_required: false,
+            }]),
             _ => Ok(Vec::new()),
         }
     }
 
     /// Validate UI state for errors
-    fn validate_ui_state(&self, ui_state: &ConflictUIState, _conflict_info: &ConflictInfo) -> Result<Vec<ValidationError>> {
+    fn validate_ui_state(
+        &self,
+        ui_state: &ConflictUIState,
+        _conflict_info: &ConflictInfo,
+    ) -> Result<Vec<ValidationError>> {
         let mut errors = Vec::new();
 
         // Validate strategy selection
-        if ui_state.current_step == ConflictResolutionStep::StrategySelection && ui_state.selected_strategy.is_none() {
+        if ui_state.current_step == ConflictResolutionStep::StrategySelection
+            && ui_state.selected_strategy.is_none()
+        {
             errors.push(ValidationError {
                 field: "selected_strategy".to_string(),
                 message: "Please select a resolution strategy".to_string(),
@@ -596,7 +616,9 @@ impl ConflictResolutionUI {
 
         // Validate manual resolution
         if ui_state.current_step == ConflictResolutionStep::ManualResolution {
-            if ui_state.selected_strategy == Some(ConflictStrategy::ManualResolution) && ui_state.preview_entity.is_none() {
+            if ui_state.selected_strategy == Some(ConflictStrategy::ManualResolution)
+                && ui_state.preview_entity.is_none()
+            {
                 errors.push(ValidationError {
                     field: "resolved_entity".to_string(),
                     message: "Please provide a resolved entity for manual resolution".to_string(),
@@ -609,11 +631,16 @@ impl ConflictResolutionUI {
     }
 
     /// Validate UI state for errors (static version)
-    fn validate_ui_state_static(ui_state: &ConflictUIState, _conflict_info: &ConflictInfo) -> Result<Vec<ValidationError>> {
+    fn validate_ui_state_static(
+        ui_state: &ConflictUIState,
+        _conflict_info: &ConflictInfo,
+    ) -> Result<Vec<ValidationError>> {
         let mut errors = Vec::new();
 
         // Validate strategy selection
-        if ui_state.current_step == ConflictResolutionStep::StrategySelection && ui_state.selected_strategy.is_none() {
+        if ui_state.current_step == ConflictResolutionStep::StrategySelection
+            && ui_state.selected_strategy.is_none()
+        {
             errors.push(ValidationError {
                 field: "selected_strategy".to_string(),
                 message: "Please select a resolution strategy".to_string(),
@@ -626,12 +653,16 @@ impl ConflictResolutionUI {
             if ui_state.selected_strategy == Some(ConflictStrategy::ManualResolution) {
                 // Check if we have either a resolved entity or field selections
                 let has_resolved_entity = ui_state.user_selections.contains_key("resolved_entity");
-                let has_field_selections = ui_state.user_selections.keys().any(|k| k.starts_with("field_"));
-                
+                let has_field_selections = ui_state
+                    .user_selections
+                    .keys()
+                    .any(|k| k.starts_with("field_"));
+
                 if !has_resolved_entity && !has_field_selections {
                     errors.push(ValidationError {
                         field: "resolved_entity".to_string(),
-                        message: "Please provide a resolved entity for manual resolution".to_string(),
+                        message: "Please provide a resolved entity for manual resolution"
+                            .to_string(),
                         severity: ValidationSeverity::Error,
                     });
                 }
@@ -651,92 +682,84 @@ impl ConflictResolutionUI {
             ConflictResolutionStep::StrategySelection => {
                 let available_strategies = Self::get_available_strategies_static(conflict_info);
                 let recommended_strategy = Self::recommend_strategy_static(conflict_info);
-                
-                Ok(vec![
-                    UIComponent {
-                        component_type: UIComponentType::StrategySelector,
-                        id: "strategy-selector".to_string(),
-                        title: "Resolution Strategy".to_string(),
-                        description: Some("Choose how to resolve this conflict".to_string()),
-                        data: serde_json::json!({
-                            "strategies": available_strategies,
-                            "recommended": recommended_strategy
-                        }),
-                        validation_rules: vec![
-                            ValidationRule {
-                                rule_type: ValidationType::Required,
-                                message: "Please select a resolution strategy".to_string(),
-                                parameters: HashMap::new(),
-                            }
-                        ],
-                        is_required: true,
-                    }
-                ])
+
+                Ok(vec![UIComponent {
+                    component_type: UIComponentType::StrategySelector,
+                    id: "strategy-selector".to_string(),
+                    title: "Resolution Strategy".to_string(),
+                    description: Some("Choose how to resolve this conflict".to_string()),
+                    data: serde_json::json!({
+                        "strategies": available_strategies,
+                        "recommended": recommended_strategy
+                    }),
+                    validation_rules: vec![ValidationRule {
+                        rule_type: ValidationType::Required,
+                        message: "Please select a resolution strategy".to_string(),
+                        parameters: HashMap::new(),
+                    }],
+                    is_required: true,
+                }])
             }
-            ConflictResolutionStep::ManualResolution => {
-                Ok(vec![
-                    UIComponent {
-                        component_type: UIComponentType::EntityEditor,
-                        id: "entity-editor".to_string(),
-                        title: "Manual Resolution".to_string(),
-                        description: Some("Edit the entity to resolve conflicts".to_string()),
-                        data: serde_json::json!({
-                            "conflicting_changes": conflict_info.conflicting_changes,
-                            "current_selections": ui_state.user_selections
-                        }),
-                        validation_rules: vec![
-                            ValidationRule {
-                                rule_type: ValidationType::Required,
-                                message: "Please provide a resolved entity".to_string(),
-                                parameters: HashMap::new(),
-                            }
-                        ],
-                        is_required: true,
-                    },
-                    UIComponent {
-                        component_type: UIComponentType::FieldMerger,
-                        id: "field-merger".to_string(),
-                        title: "Field-by-Field Merge".to_string(),
-                        description: Some("Choose values for each conflicting field".to_string()),
-                        data: serde_json::json!({
-                            "conflicting_fields": Self::extract_conflicting_fields_static(&conflict_info.conflicting_changes)
-                        }),
-                        validation_rules: Vec::new(),
-                        is_required: false,
-                    }
-                ])
-            }
-            ConflictResolutionStep::PreviewConfirmation => {
-                Ok(vec![
-                    UIComponent {
-                        component_type: UIComponentType::PreviewPanel,
-                        id: "preview-panel".to_string(),
-                        title: "Resolution Preview".to_string(),
-                        description: Some("Review the resolved entity before applying".to_string()),
-                        data: serde_json::json!({
-                            "preview_entity": ui_state.preview_entity,
-                            "strategy": ui_state.selected_strategy,
-                            "discarded_changes": Self::calculate_discarded_changes_static(ui_state, conflict_info)
-                        }),
-                        validation_rules: Vec::new(),
-                        is_required: false,
-                    }
-                ])
-            }
+            ConflictResolutionStep::ManualResolution => Ok(vec![
+                UIComponent {
+                    component_type: UIComponentType::EntityEditor,
+                    id: "entity-editor".to_string(),
+                    title: "Manual Resolution".to_string(),
+                    description: Some("Edit the entity to resolve conflicts".to_string()),
+                    data: serde_json::json!({
+                        "conflicting_changes": conflict_info.conflicting_changes,
+                        "current_selections": ui_state.user_selections
+                    }),
+                    validation_rules: vec![ValidationRule {
+                        rule_type: ValidationType::Required,
+                        message: "Please provide a resolved entity".to_string(),
+                        parameters: HashMap::new(),
+                    }],
+                    is_required: true,
+                },
+                UIComponent {
+                    component_type: UIComponentType::FieldMerger,
+                    id: "field-merger".to_string(),
+                    title: "Field-by-Field Merge".to_string(),
+                    description: Some("Choose values for each conflicting field".to_string()),
+                    data: serde_json::json!({
+                        "conflicting_fields": Self::extract_conflicting_fields_static(&conflict_info.conflicting_changes)
+                    }),
+                    validation_rules: Vec::new(),
+                    is_required: false,
+                },
+            ]),
+            ConflictResolutionStep::PreviewConfirmation => Ok(vec![UIComponent {
+                component_type: UIComponentType::PreviewPanel,
+                id: "preview-panel".to_string(),
+                title: "Resolution Preview".to_string(),
+                description: Some("Review the resolved entity before applying".to_string()),
+                data: serde_json::json!({
+                    "preview_entity": ui_state.preview_entity,
+                    "strategy": ui_state.selected_strategy,
+                    "discarded_changes": Self::calculate_discarded_changes_static(ui_state, conflict_info)
+                }),
+                validation_rules: Vec::new(),
+                is_required: false,
+            }]),
             _ => Ok(Vec::new()),
         }
     }
 
     /// Generate preview entity based on user selections (static version)
-    fn generate_preview_entity_static(ui_state: &ConflictUIState, conflict_info: &ConflictInfo) -> Result<serde_json::Value> {
+    fn generate_preview_entity_static(
+        ui_state: &ConflictUIState,
+        conflict_info: &ConflictInfo,
+    ) -> Result<serde_json::Value> {
         match ui_state.selected_strategy {
             Some(ConflictStrategy::LastWriterWins) => {
                 // Find the most recent change
-                let latest_change = conflict_info.conflicting_changes
+                let latest_change = conflict_info
+                    .conflicting_changes
                     .iter()
                     .max_by_key(|c| c.change.metadata.timestamp)
                     .ok_or_else(|| anyhow!("No conflicting changes found"))?;
-                
+
                 Ok(latest_change.change.full_entity.clone().unwrap_or_default())
             }
             Some(ConflictStrategy::ManualResolution) => {
@@ -765,7 +788,9 @@ impl ConflictResolutionUI {
     }
 
     /// Get available strategies for a conflict (static version)
-    fn get_available_strategies_static(conflict_info: &ConflictInfo) -> Vec<ConflictStrategyOption> {
+    fn get_available_strategies_static(
+        conflict_info: &ConflictInfo,
+    ) -> Vec<ConflictStrategyOption> {
         let mut strategies = vec![
             ConflictStrategyOption {
                 strategy: ConflictStrategy::LastWriterWins,
@@ -797,7 +822,9 @@ impl ConflictResolutionUI {
         ];
 
         // Add manual resolution for complex conflicts
-        if conflict_info.conflicting_changes.len() > 1 || conflict_info.conflict_type == ConflictType::SemanticConflict {
+        if conflict_info.conflicting_changes.len() > 1
+            || conflict_info.conflict_type == ConflictType::SemanticConflict
+        {
             strategies.push(ConflictStrategyOption {
                 strategy: ConflictStrategy::ManualResolution,
                 name: "Manual Resolution".to_string(),
@@ -830,14 +857,17 @@ impl ConflictResolutionUI {
     }
 
     /// Extract conflicting fields from changes (static version)
-    fn extract_conflicting_fields_static(changes: &[crate::services::conflict_resolution_engine::ConflictingChange]) -> serde_json::Value {
+    fn extract_conflicting_fields_static(
+        changes: &[crate::services::conflict_resolution_engine::ConflictingChange],
+    ) -> serde_json::Value {
         let mut conflicting_fields = serde_json::Map::new();
-        
+
         for change in changes {
             if let Some(entity) = &change.change.full_entity {
                 if let serde_json::Value::Object(obj) = entity {
                     for (key, value) in obj {
-                        conflicting_fields.entry(key.clone())
+                        conflicting_fields
+                            .entry(key.clone())
                             .or_insert_with(|| serde_json::json!([]))
                             .as_array_mut()
                             .unwrap()
@@ -851,20 +881,25 @@ impl ConflictResolutionUI {
                 }
             }
         }
-        
+
         serde_json::Value::Object(conflicting_fields)
     }
 
     /// Calculate which changes will be discarded (static version)
-    fn calculate_discarded_changes_static(ui_state: &ConflictUIState, conflict_info: &ConflictInfo) -> Vec<Uuid> {
+    fn calculate_discarded_changes_static(
+        ui_state: &ConflictUIState,
+        conflict_info: &ConflictInfo,
+    ) -> Vec<Uuid> {
         match ui_state.selected_strategy {
             Some(ConflictStrategy::LastWriterWins) => {
-                let latest_change = conflict_info.conflicting_changes
+                let latest_change = conflict_info
+                    .conflicting_changes
                     .iter()
                     .max_by_key(|c| c.change.metadata.timestamp);
-                
+
                 if let Some(latest) = latest_change {
-                    conflict_info.conflicting_changes
+                    conflict_info
+                        .conflicting_changes
                         .iter()
                         .filter(|c| c.change_id != latest.change_id)
                         .map(|c| c.change_id)
@@ -873,18 +908,20 @@ impl ConflictResolutionUI {
                     Vec::new()
                 }
             }
-            Some(ConflictStrategy::Reject) => {
-                conflict_info.conflicting_changes
-                    .iter()
-                    .map(|c| c.change_id)
-                    .collect()
-            }
+            Some(ConflictStrategy::Reject) => conflict_info
+                .conflicting_changes
+                .iter()
+                .map(|c| c.change_id)
+                .collect(),
             _ => Vec::new(), // AutoMerge and ManualResolution don't discard changes
         }
     }
 
     /// Update progress tracking (static version)
-    fn update_progress_static(ui_state: &mut ConflictUIState, current_step: &ConflictResolutionStep) {
+    fn update_progress_static(
+        ui_state: &mut ConflictUIState,
+        current_step: &ConflictResolutionStep,
+    ) {
         if !ui_state.progress.completed_steps.contains(current_step) {
             ui_state.progress.completed_steps.push(current_step.clone());
         }
@@ -909,15 +946,20 @@ impl ConflictResolutionUI {
     }
 
     /// Generate preview entity based on user selections
-    fn generate_preview_entity(&self, ui_state: &ConflictUIState, conflict_info: &ConflictInfo) -> Result<serde_json::Value> {
+    fn generate_preview_entity(
+        &self,
+        ui_state: &ConflictUIState,
+        conflict_info: &ConflictInfo,
+    ) -> Result<serde_json::Value> {
         match ui_state.selected_strategy {
             Some(ConflictStrategy::LastWriterWins) => {
                 // Find the most recent change
-                let latest_change = conflict_info.conflicting_changes
+                let latest_change = conflict_info
+                    .conflicting_changes
                     .iter()
                     .max_by_key(|c| c.change.metadata.timestamp)
                     .ok_or_else(|| anyhow!("No conflicting changes found"))?;
-                
+
                 Ok(latest_change.change.full_entity.clone().unwrap_or_default())
             }
             Some(ConflictStrategy::ManualResolution) => {
@@ -946,14 +988,18 @@ impl ConflictResolutionUI {
     }
 
     /// Extract conflicting fields from changes
-    fn extract_conflicting_fields(&self, changes: &[crate::services::conflict_resolution_engine::ConflictingChange]) -> serde_json::Value {
+    fn extract_conflicting_fields(
+        &self,
+        changes: &[crate::services::conflict_resolution_engine::ConflictingChange],
+    ) -> serde_json::Value {
         let mut conflicting_fields = serde_json::Map::new();
-        
+
         for change in changes {
             if let Some(entity) = &change.change.full_entity {
                 if let serde_json::Value::Object(obj) = entity {
                     for (key, value) in obj {
-                        conflicting_fields.entry(key.clone())
+                        conflicting_fields
+                            .entry(key.clone())
                             .or_insert_with(|| serde_json::json!([]))
                             .as_array_mut()
                             .unwrap()
@@ -967,20 +1013,26 @@ impl ConflictResolutionUI {
                 }
             }
         }
-        
+
         serde_json::Value::Object(conflicting_fields)
     }
 
     /// Calculate which changes will be discarded
-    fn calculate_discarded_changes(&self, ui_state: &ConflictUIState, conflict_info: &ConflictInfo) -> Vec<Uuid> {
+    fn calculate_discarded_changes(
+        &self,
+        ui_state: &ConflictUIState,
+        conflict_info: &ConflictInfo,
+    ) -> Vec<Uuid> {
         match ui_state.selected_strategy {
             Some(ConflictStrategy::LastWriterWins) => {
-                let latest_change = conflict_info.conflicting_changes
+                let latest_change = conflict_info
+                    .conflicting_changes
                     .iter()
                     .max_by_key(|c| c.change.metadata.timestamp);
-                
+
                 if let Some(latest) = latest_change {
-                    conflict_info.conflicting_changes
+                    conflict_info
+                        .conflicting_changes
                         .iter()
                         .filter(|c| c.change_id != latest.change_id)
                         .map(|c| c.change_id)
@@ -989,12 +1041,11 @@ impl ConflictResolutionUI {
                     Vec::new()
                 }
             }
-            Some(ConflictStrategy::Reject) => {
-                conflict_info.conflicting_changes
-                    .iter()
-                    .map(|c| c.change_id)
-                    .collect()
-            }
+            Some(ConflictStrategy::Reject) => conflict_info
+                .conflicting_changes
+                .iter()
+                .map(|c| c.change_id)
+                .collect(),
             _ => Vec::new(), // AutoMerge and ManualResolution don't discard changes
         }
     }
@@ -1009,8 +1060,8 @@ impl Default for ConflictResolutionUI {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::conflict_resolution_engine::{ConflictingChange, ClientInfo};
-    use crate::services::websocket_types::{ContextChange, ChangeType, ChangeMetadata};
+    use crate::services::conflict_resolution_engine::{ClientInfo, ConflictingChange};
+    use crate::services::websocket_types::{ChangeMetadata, ChangeType, ContextChange};
     use serde_json::json;
 
     fn create_test_conflict_info() -> ConflictInfo {
@@ -1100,7 +1151,7 @@ mod tests {
     async fn test_start_resolution_session() {
         let mut ui = ConflictResolutionUI::new();
         let conflict_info = create_test_conflict_info();
-        
+
         let request = StartResolutionRequest {
             conflict_id: conflict_info.conflict_id.clone(),
             user_id: "test-user".to_string(),
@@ -1109,8 +1160,11 @@ mod tests {
             timeout_seconds: Some(600),
         };
 
-        let response = ui.start_resolution_session(request, conflict_info).await.unwrap();
-        
+        let response = ui
+            .start_resolution_session(request, conflict_info)
+            .await
+            .unwrap();
+
         assert!(!response.session_id.is_empty());
         assert_eq!(response.recommended_strategy, ConflictStrategy::AutoMerge);
         assert!(!response.available_strategies.is_empty());
@@ -1121,7 +1175,7 @@ mod tests {
     async fn test_update_ui_state() {
         let mut ui = ConflictResolutionUI::new();
         let conflict_info = create_test_conflict_info();
-        
+
         let start_request = StartResolutionRequest {
             conflict_id: conflict_info.conflict_id.clone(),
             user_id: "test-user".to_string(),
@@ -1130,11 +1184,14 @@ mod tests {
             timeout_seconds: Some(600),
         };
 
-        let start_response = ui.start_resolution_session(start_request, conflict_info).await.unwrap();
-        
+        let start_response = ui
+            .start_resolution_session(start_request, conflict_info)
+            .await
+            .unwrap();
+
         let mut user_selections = HashMap::new();
         user_selections.insert("strategy".to_string(), json!("LastWriterWins"));
-        
+
         let update_request = UpdateUIStateRequest {
             session_id: start_response.session_id.clone(),
             step: ConflictResolutionStep::StrategySelection,
@@ -1143,17 +1200,23 @@ mod tests {
         };
 
         let update_response = ui.update_ui_state(update_request).await.unwrap();
-        
+
         assert!(update_response.success);
-        assert_eq!(update_response.updated_ui_state.current_step, ConflictResolutionStep::StrategySelection);
-        assert_eq!(update_response.updated_ui_state.selected_strategy, Some(ConflictStrategy::LastWriterWins));
+        assert_eq!(
+            update_response.updated_ui_state.current_step,
+            ConflictResolutionStep::StrategySelection
+        );
+        assert_eq!(
+            update_response.updated_ui_state.selected_strategy,
+            Some(ConflictStrategy::LastWriterWins)
+        );
     }
 
     #[tokio::test]
     async fn test_complete_resolution() {
         let mut ui = ConflictResolutionUI::new();
         let conflict_info = create_test_conflict_info();
-        
+
         let start_request = StartResolutionRequest {
             conflict_id: conflict_info.conflict_id.clone(),
             user_id: "test-user".to_string(),
@@ -1162,8 +1225,11 @@ mod tests {
             timeout_seconds: Some(600),
         };
 
-        let start_response = ui.start_resolution_session(start_request, conflict_info).await.unwrap();
-        
+        let start_response = ui
+            .start_resolution_session(start_request, conflict_info)
+            .await
+            .unwrap();
+
         // Update to strategy selection
         let update_request = UpdateUIStateRequest {
             session_id: start_response.session_id.clone(),
@@ -1173,12 +1239,18 @@ mod tests {
         };
         ui.update_ui_state(update_request).await.unwrap();
 
-        let manual_request = ui.complete_resolution(
-            &start_response.session_id,
-            Some("Resolved using last writer wins".to_string()),
-        ).await.unwrap();
-        
-        assert_eq!(manual_request.resolution_strategy, ConflictStrategy::LastWriterWins);
+        let manual_request = ui
+            .complete_resolution(
+                &start_response.session_id,
+                Some("Resolved using last writer wins".to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            manual_request.resolution_strategy,
+            ConflictStrategy::LastWriterWins
+        );
         assert_eq!(manual_request.resolved_by, "test-user");
         assert!(manual_request.resolution_notes.is_some());
     }
@@ -1186,29 +1258,38 @@ mod tests {
     #[tokio::test]
     async fn test_strategy_recommendation() {
         let ui = ConflictResolutionUI::new();
-        
+
         // Test version conflict recommendation
         let mut version_conflict = create_test_conflict_info();
         version_conflict.conflict_type = ConflictType::VersionConflict;
-        assert_eq!(ui.recommend_strategy(&version_conflict), ConflictStrategy::LastWriterWins);
-        
+        assert_eq!(
+            ui.recommend_strategy(&version_conflict),
+            ConflictStrategy::LastWriterWins
+        );
+
         // Test semantic conflict recommendation
         let mut semantic_conflict = create_test_conflict_info();
         semantic_conflict.conflict_type = ConflictType::SemanticConflict;
-        assert_eq!(ui.recommend_strategy(&semantic_conflict), ConflictStrategy::ManualResolution);
-        
+        assert_eq!(
+            ui.recommend_strategy(&semantic_conflict),
+            ConflictStrategy::ManualResolution
+        );
+
         // Test simple content conflict recommendation
         let mut simple_content_conflict = create_test_conflict_info();
         simple_content_conflict.conflict_type = ConflictType::ContentConflict;
         simple_content_conflict.conflicting_changes.truncate(2);
-        assert_eq!(ui.recommend_strategy(&simple_content_conflict), ConflictStrategy::AutoMerge);
+        assert_eq!(
+            ui.recommend_strategy(&simple_content_conflict),
+            ConflictStrategy::AutoMerge
+        );
     }
 
     #[tokio::test]
     async fn test_validation() {
         let ui = ConflictResolutionUI::new();
         let conflict_info = create_test_conflict_info();
-        
+
         // Test validation with missing strategy
         let ui_state = ConflictUIState {
             current_step: ConflictResolutionStep::StrategySelection,
@@ -1223,7 +1304,7 @@ mod tests {
                 estimated_time_remaining: Some(180),
             },
         };
-        
+
         let errors = ui.validate_ui_state(&ui_state, &conflict_info).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].severity, ValidationSeverity::Error);

@@ -1,9 +1,11 @@
+use crate::models::enhanced_context::EnhancedContextItem;
 use crate::services::change_broadcaster::ChangeBroadcaster;
 use crate::services::change_detection_service::ChangeDetectionService;
+use crate::services::conflict_resolution_engine::{
+    ConflictInfo, ConflictResolutionEngine, ConflictResolutionResult, ManualResolutionRequest,
+};
 use crate::services::websocket_manager::WebSocketManager;
 use crate::services::websocket_types::*;
-use crate::services::conflict_resolution_engine::{ConflictResolutionEngine, ConflictInfo, ConflictResolutionResult, ManualResolutionRequest};
-use crate::models::enhanced_context::EnhancedContextItem;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
@@ -52,9 +54,15 @@ impl SyncEngine {
     }
 
     /// Subscribe a client to changes with filters
-    pub async fn subscribe(&self, client_id: ClientId, filters: Vec<SyncFilters>) -> Result<SyncStream> {
+    pub async fn subscribe(
+        &self,
+        client_id: ClientId,
+        filters: Vec<SyncFilters>,
+    ) -> Result<SyncStream> {
         // Subscribe to change broadcaster
-        self.change_broadcaster.subscribe(client_id, filters.clone()).await?;
+        self.change_broadcaster
+            .subscribe(client_id, filters.clone())
+            .await?;
 
         // Create a receiver for this client
         let receiver = self.change_broadcaster.subscribe_to_changes();
@@ -65,7 +73,9 @@ impl SyncEngine {
     /// Broadcast a change to all subscribed clients
     pub async fn broadcast_change(&self, change: ContextChange) -> Result<()> {
         // Broadcast through the change broadcaster
-        self.change_broadcaster.broadcast_change_from_context(change.clone()).await?;
+        self.change_broadcaster
+            .broadcast_change_from_context(change.clone())
+            .await?;
 
         // Also broadcast through WebSocket manager
         self.websocket_manager.broadcast_change(change).await?;
@@ -81,7 +91,9 @@ impl SyncEngine {
         recent_changes: &[ContextChange],
     ) -> Result<Option<ConflictInfo>> {
         let mut conflict_resolver = self.conflict_resolver.lock().await;
-        conflict_resolver.detect_conflict(incoming_change, existing_entity, recent_changes).await
+        conflict_resolver
+            .detect_conflict(incoming_change, existing_entity, recent_changes)
+            .await
     }
 
     /// Resolve a conflict using the specified strategy
@@ -92,7 +104,9 @@ impl SyncEngine {
         resolver: Option<String>,
     ) -> Result<ConflictResolutionResult> {
         let mut conflict_resolver = self.conflict_resolver.lock().await;
-        conflict_resolver.resolve_conflict(conflict_id, strategy, resolver).await
+        conflict_resolver
+            .resolve_conflict(conflict_id, strategy, resolver)
+            .await
     }
 
     /// Resolve a conflict manually with provided resolution data
@@ -113,25 +127,37 @@ impl SyncEngine {
     /// Get all active conflicts for a project
     pub async fn get_active_conflicts(&self, project_id: &str) -> Vec<ConflictInfo> {
         let conflict_resolver = self.conflict_resolver.lock().await;
-        conflict_resolver.get_active_conflicts(project_id).into_iter().cloned().collect()
+        conflict_resolver
+            .get_active_conflicts(project_id)
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// Get all resolved conflicts for a project
     pub async fn get_resolved_conflicts(&self, project_id: &str) -> Vec<ConflictInfo> {
         let conflict_resolver = self.conflict_resolver.lock().await;
-        conflict_resolver.get_resolved_conflicts(project_id).into_iter().cloned().collect()
+        conflict_resolver
+            .get_resolved_conflicts(project_id)
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// Handle conflict resolution (legacy method for backward compatibility)
     pub async fn handle_conflict(&self, conflict: SyncConflict) -> Result<Resolution> {
         warn!("Using legacy handle_conflict method - consider using the new conflict resolution methods");
-        
+
         // Convert SyncConflict to the new format and use default strategy
         if let Some(first_change) = conflict.conflicting_changes.first() {
-            let conflict_info = self.detect_and_handle_conflict(first_change, None, &conflict.conflicting_changes).await?;
-            
+            let conflict_info = self
+                .detect_and_handle_conflict(first_change, None, &conflict.conflicting_changes)
+                .await?;
+
             if let Some(info) = conflict_info {
-                let result = self.resolve_conflict(&info.conflict_id, ConflictStrategy::LastWriterWins, None).await?;
+                let result = self
+                    .resolve_conflict(&info.conflict_id, ConflictStrategy::LastWriterWins, None)
+                    .await?;
                 match result.strategy_used {
                     ConflictStrategy::LastWriterWins => Ok(Resolution::LastWriterWins),
                     ConflictStrategy::AutoMerge => Ok(Resolution::AutoMerge),
@@ -189,7 +215,11 @@ pub struct SyncStream {
 }
 
 impl SyncStream {
-    fn new(receiver: broadcast::Receiver<ContextChange>, client_id: ClientId, filters: Vec<SyncFilters>) -> Self {
+    fn new(
+        receiver: broadcast::Receiver<ContextChange>,
+        client_id: ClientId,
+        filters: Vec<SyncFilters>,
+    ) -> Self {
         Self {
             receiver,
             client_id,
@@ -201,10 +231,10 @@ impl SyncStream {
     pub async fn next(&mut self) -> Result<ContextChange> {
         loop {
             let change = self.receiver.recv().await?;
-            
+
             // Check if change matches any of the client's filters
             let matches = self.filters.iter().any(|filter| filter.matches(&change));
-            
+
             if matches {
                 return Ok(change);
             }
@@ -276,24 +306,30 @@ mod tests {
     #[tokio::test]
     async fn test_sync_engine_creation() {
         let sync_engine = SyncEngine::new();
-        
+
         // Test that all components are created
-        assert!(!sync_engine.change_broadcaster.subscriptions.is_empty() || sync_engine.change_broadcaster.subscriptions.is_empty());
-        assert!(!sync_engine.websocket_manager.connections.is_empty() || sync_engine.websocket_manager.connections.is_empty());
+        assert!(
+            !sync_engine.change_broadcaster.subscriptions.is_empty()
+                || sync_engine.change_broadcaster.subscriptions.is_empty()
+        );
+        assert!(
+            !sync_engine.websocket_manager.connections.is_empty()
+                || sync_engine.websocket_manager.connections.is_empty()
+        );
     }
 
     #[tokio::test]
     async fn test_client_subscription() {
         let sync_engine = SyncEngine::new();
         let client_id = Uuid::new_v4();
-        
+
         let filters = vec![SyncFilters {
             project_ids: Some(vec!["test-project".to_string()]),
             entity_types: Some(vec!["business_rule".to_string()]),
             feature_areas: None,
             change_types: None,
         }];
-        
+
         let stream = sync_engine.subscribe(client_id, filters).await.unwrap();
         assert_eq!(stream.client_id(), client_id);
     }
@@ -302,7 +338,7 @@ mod tests {
     async fn test_change_broadcasting() {
         let sync_engine = SyncEngine::new();
         let client_id = Uuid::new_v4();
-        
+
         // Subscribe a client
         let filters = vec![SyncFilters {
             project_ids: Some(vec!["test-project".to_string()]),
@@ -310,9 +346,9 @@ mod tests {
             feature_areas: None,
             change_types: Some(vec![ChangeType::Create]),
         }];
-        
+
         let _stream = sync_engine.subscribe(client_id, filters).await.unwrap();
-        
+
         // Create a test change
         let change = ContextChange {
             change_id: Uuid::new_v4(),
@@ -335,7 +371,7 @@ mod tests {
                 conflict_resolution: None,
             },
         };
-        
+
         // Broadcast the change
         let result = sync_engine.broadcast_change(change).await;
         assert!(result.is_ok());
@@ -344,10 +380,10 @@ mod tests {
     #[tokio::test]
     async fn test_sync_status() {
         let sync_engine = SyncEngine::new();
-        
+
         let status = sync_engine.get_sync_status("test-project").await;
         assert!(status.is_ok());
-        
+
         let sync_status = status.unwrap();
         assert_eq!(sync_status.project_id, "test-project");
     }
@@ -357,13 +393,13 @@ mod tests {
         let sync_engine = SyncEngine::new();
         let change_detector = sync_engine.get_change_detector();
         let client_id = Uuid::new_v4();
-        
+
         let entity_data = json!({
             "id": "rule-1",
             "name": "Test Rule",
             "description": "A test business rule"
         });
-        
+
         let result = change_detector
             .notify_entity_created(
                 "business_rule",
@@ -374,7 +410,7 @@ mod tests {
                 Some("authentication".to_string()),
             )
             .await;
-        
+
         assert!(result.is_ok());
     }
 }

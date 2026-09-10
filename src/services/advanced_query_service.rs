@@ -1,7 +1,7 @@
-use crate::models::embedding::{VectorSearchQuery, SearchFilters, DateRange, RankingMethod};
-use crate::models::enhanced_context::{EnhancedContextItem, ContextType, Priority};
+use crate::models::embedding::{DateRange, RankingMethod, SearchFilters, VectorSearchQuery};
+use crate::models::enhanced_context::{ContextType, EnhancedContextItem, Priority};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -179,13 +179,13 @@ pub struct AdvancedSearchMetadata {
 pub enum AdvancedQueryError {
     #[error("Query processing error: {message}")]
     QueryProcessingError { message: String },
-    
+
     #[error("Filter validation error: {message}")]
     FilterValidationError { message: String },
-    
+
     #[error("Cross-project access denied: {project_id}")]
     CrossProjectAccessDenied { project_id: String },
-    
+
     #[error("Configuration error: {message}")]
     ConfigurationError { message: String },
 }
@@ -227,7 +227,7 @@ pub trait AdvancedQueryService: Send + Sync {
         query: &AdvancedSearchQuery,
         user_context: Option<&UserContext>,
     ) -> Result<AdvancedSearchResult, AdvancedQueryError>;
-    
+
     /// Generate query suggestions based on partial input
     async fn suggest_queries(
         &self,
@@ -235,7 +235,7 @@ pub trait AdvancedQueryService: Send + Sync {
         project_id: Option<&str>,
         context_patterns: &[String],
     ) -> Result<Vec<QuerySuggestion>, AdvancedQueryError>;
-    
+
     /// Get auto-completion suggestions for query input
     async fn auto_complete(
         &self,
@@ -243,7 +243,7 @@ pub trait AdvancedQueryService: Send + Sync {
         cursor_position: usize,
         project_id: Option<&str>,
     ) -> Result<Vec<String>, AdvancedQueryError>;
-    
+
     /// Search across multiple projects with access control
     async fn cross_project_search(
         &self,
@@ -251,14 +251,14 @@ pub trait AdvancedQueryService: Send + Sync {
         accessible_projects: &[String],
         max_results_per_project: usize,
     ) -> Result<Vec<CrossProjectMatch>, AdvancedQueryError>;
-    
+
     /// Apply advanced filters to search results
     async fn apply_filters(
         &self,
         results: Vec<String>, // Simplified for now
         filters: &AdvancedSearchFilters,
     ) -> Result<(Vec<String>, FilterStatistics), AdvancedQueryError>;
-    
+
     /// Get filter suggestions based on current query and results
     async fn suggest_filters(
         &self,
@@ -277,7 +277,7 @@ impl AdvancedQueryServiceImpl {
     pub fn new(config: AdvancedQueryConfig) -> Self {
         Self { config }
     }
-    
+
     /// Validate and normalize search filters
     fn validate_filters(&self, filters: &AdvancedSearchFilters) -> Result<(), AdvancedQueryError> {
         // Validate quality range
@@ -293,7 +293,7 @@ impl AdvancedQueryServiceImpl {
                 });
             }
         }
-        
+
         // Validate date range
         if let Some(date_range) = &filters.base_filters.date_range {
             if date_range.start > date_range.end {
@@ -302,15 +302,15 @@ impl AdvancedQueryServiceImpl {
                 });
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Generate intent-based query suggestions
     fn generate_intent_suggestions(&self, partial_query: &str) -> Vec<QuerySuggestion> {
         let mut suggestions = Vec::new();
         let query_lower = partial_query.to_lowercase();
-        
+
         // Implementation intent suggestions
         if query_lower.contains("how") || query_lower.contains("implement") {
             suggestions.push(QuerySuggestion {
@@ -321,7 +321,7 @@ impl AdvancedQueryServiceImpl {
                 estimated_results: 0,
             });
         }
-        
+
         // Best practices suggestions
         if query_lower.contains("best") || query_lower.contains("practice") {
             suggestions.push(QuerySuggestion {
@@ -332,7 +332,7 @@ impl AdvancedQueryServiceImpl {
                 estimated_results: 0,
             });
         }
-        
+
         // Example suggestions
         if query_lower.contains("example") || query_lower.contains("sample") {
             suggestions.push(QuerySuggestion {
@@ -343,7 +343,7 @@ impl AdvancedQueryServiceImpl {
                 estimated_results: 0,
             });
         }
-        
+
         suggestions
     }
 }
@@ -356,21 +356,21 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
         _user_context: Option<&UserContext>,
     ) -> Result<AdvancedSearchResult, AdvancedQueryError> {
         let start_time = std::time::Instant::now();
-        
+
         info!("Starting advanced search for query: {}", query.query_text);
-        
+
         // Validate filters
         self.validate_filters(&query.filters)?;
-        
+
         // Generate suggestions if requested
         let suggestions = if query.include_suggestions && self.config.enable_query_suggestions {
             self.generate_intent_suggestions(&query.query_text)
         } else {
             Vec::new()
         };
-        
+
         let total_time = start_time.elapsed().as_millis() as u64;
-        
+
         let search_metadata = AdvancedSearchMetadata {
             query_processing_time_ms: total_time,
             suggestion_generation_time_ms: 0,
@@ -379,7 +379,7 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
             filters_applied: vec!["quality".to_string(), "date".to_string()],
             search_strategy: "simplified".to_string(),
         };
-        
+
         let filter_stats = FilterStatistics {
             total_candidates: 0,
             filtered_by_quality: 0,
@@ -388,7 +388,7 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
             filtered_by_project: 0,
             final_results: 0,
         };
-        
+
         Ok(AdvancedSearchResult {
             suggestions,
             filter_stats,
@@ -396,7 +396,7 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
             search_metadata,
         })
     }
-    
+
     async fn suggest_queries(
         &self,
         partial_query: &str,
@@ -404,14 +404,14 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
         _context_patterns: &[String],
     ) -> Result<Vec<QuerySuggestion>, AdvancedQueryError> {
         debug!("Generating query suggestions for: {}", partial_query);
-        
+
         if !self.config.enable_query_suggestions {
             return Ok(Vec::new());
         }
-        
+
         Ok(self.generate_intent_suggestions(partial_query))
     }
-    
+
     async fn auto_complete(
         &self,
         partial_query: &str,
@@ -419,11 +419,11 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
         _project_id: Option<&str>,
     ) -> Result<Vec<String>, AdvancedQueryError> {
         debug!("Generating auto-completion for: {}", partial_query);
-        
+
         if !self.config.enable_auto_completion {
             return Ok(Vec::new());
         }
-        
+
         // Simple auto-completion based on common query patterns
         let completions = vec![
             format!("{} implementation", partial_query),
@@ -432,13 +432,14 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
             format!("{} architecture", partial_query),
             format!("{} security", partial_query),
         ];
-        
-        Ok(completions.into_iter()
+
+        Ok(completions
+            .into_iter()
             .filter(|c| c.len() > partial_query.len())
             .take(5)
             .collect())
     }
-    
+
     async fn cross_project_search(
         &self,
         _query: &str,
@@ -446,21 +447,21 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
         _max_results_per_project: usize,
     ) -> Result<Vec<CrossProjectMatch>, AdvancedQueryError> {
         debug!("Cross-project search not implemented in simplified version");
-        
+
         if !self.config.enable_cross_project_search {
             return Ok(Vec::new());
         }
-        
+
         Ok(Vec::new())
     }
-    
+
     async fn apply_filters(
         &self,
         results: Vec<String>,
         _filters: &AdvancedSearchFilters,
     ) -> Result<(Vec<String>, FilterStatistics), AdvancedQueryError> {
         debug!("Applying advanced filters to {} results", results.len());
-        
+
         let stats = FilterStatistics {
             total_candidates: results.len(),
             filtered_by_quality: 0,
@@ -469,20 +470,23 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
             filtered_by_project: 0,
             final_results: results.len(),
         };
-        
+
         Ok((results, stats))
     }
-    
+
     async fn suggest_filters(
         &self,
         _query: &str,
         current_results: &[String],
         _project_id: Option<&str>,
     ) -> Result<Vec<FilterSuggestion>, AdvancedQueryError> {
-        debug!("Generating filter suggestions for {} results", current_results.len());
-        
+        debug!(
+            "Generating filter suggestions for {} results",
+            current_results.len()
+        );
+
         let mut suggestions = Vec::new();
-        
+
         // Suggest quality filter if results have varying quality
         if current_results.len() > 5 {
             suggestions.push(FilterSuggestion {
@@ -493,7 +497,7 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
                 confidence: 0.7,
             });
         }
-        
+
         // Suggest date filter for recent results
         suggestions.push(FilterSuggestion {
             filter_type: "date".to_string(),
@@ -502,7 +506,7 @@ impl AdvancedQueryService for AdvancedQueryServiceImpl {
             estimated_reduction: 0.2,
             confidence: 0.6,
         });
-        
+
         Ok(suggestions)
     }
 }
