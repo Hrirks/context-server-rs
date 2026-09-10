@@ -1,12 +1,13 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::models::specification::ProjectSpecification;
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rmcp::model::ErrorData as McpError;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Service for managing specification versions and change tracking
@@ -134,17 +135,24 @@ pub enum DifferenceType {
 
 /// SQLite implementation of SpecificationVersioningService
 pub struct SqliteSpecificationVersioningService {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqliteSpecificationVersioningService {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection, McpError> {
+        self.pool.checkout().map_err(|e| {
+            McpError::internal_error(format!("Failed to acquire database connection: {e}"), None)
+        })
     }
 
     /// Initialize database tables for specification versioning
     pub fn initialize_tables(&self) -> Result<(), McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         // Create specification_versions table
         db.execute(
@@ -313,7 +321,8 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
         spec: &ProjectSpecification,
         change_description: &str,
     ) -> Result<SpecificationVersion, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let content_hash = Self::calculate_content_hash(&spec.content.raw_content);
 
@@ -392,7 +401,8 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
     }
 
     async fn get_versions(&self, spec_id: &str) -> Result<Vec<SpecificationVersion>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut versions = Vec::new();
 
         let mut stmt = db
@@ -423,7 +433,8 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
         &self,
         version_id: &str,
     ) -> Result<Option<SpecificationVersion>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db
             .prepare(
@@ -478,7 +489,8 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
         &self,
         spec_id: &str,
     ) -> Result<Option<SpecificationVersion>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db
             .prepare(
@@ -528,7 +540,8 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
         spec_id: &str,
         keep_count: usize,
     ) -> Result<usize, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         // Get versions to delete (keep only the latest N)
         let mut stmt = db
@@ -574,9 +587,8 @@ impl SpecificationVersioningService for SqliteSpecificationVersioningService {
 mod tests {
     use super::*;
     use crate::models::specification::{SpecContent, SpecFormat, SpecType};
-    use rusqlite::Connection;
 
-    fn create_test_db() -> Arc<Mutex<Connection>> {
+    fn create_test_pool() -> Arc<ConnectionPool> {
         // In-memory DB avoids the NamedTempFile lifetime bug where the file is
         // unlinked while the connection is still open (causing "disk I/O error"
         // when SQLite tries to create journal sidecars by path on macOS).
@@ -584,9 +596,19 @@ mod tests {
         // foreign_keys is disabled so the versioning unit tests don't need the
         // full parent-table graph: the bundled SQLite is compiled with
         // SQLITE_DEFAULT_FOREIGN_KEYS=1, so FK enforcement is otherwise on.
-        let db = Connection::open_in_memory().unwrap();
-        db.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-        Arc::new(Mutex::new(db))
+        // A pool of one in-memory connection. max=1 guarantees the same
+        // connection is reused on every checkout, so the single
+        // foreign_keys=OFF pragma below persists for the whole test. (A pool
+        // of N ":memory:" connections would be N *separate* databases.)
+        let pool = ConnectionPool::new(":memory:", 1, std::time::Duration::from_secs(1)).unwrap();
+        {
+            let conn = pool.checkout().unwrap();
+            conn.lock()
+                .unwrap()
+                .execute_batch("PRAGMA foreign_keys = OFF;")
+                .unwrap();
+        }
+        Arc::new(pool)
     }
 
     fn create_test_spec() -> ProjectSpecification {
@@ -604,8 +626,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_version() {
-        let db = create_test_db();
-        let service = SqliteSpecificationVersioningService::new(db);
+        let pool = create_test_pool();
+        let service = SqliteSpecificationVersioningService::new(pool);
         service.initialize_tables().unwrap();
 
         let spec = create_test_spec();
@@ -620,8 +642,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_versions() {
-        let db = create_test_db();
-        let service = SqliteSpecificationVersioningService::new(db);
+        let pool = create_test_pool();
+        let service = SqliteSpecificationVersioningService::new(pool);
         service.initialize_tables().unwrap();
 
         let spec = create_test_spec();
@@ -640,8 +662,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_compare_versions() {
-        let db = create_test_db();
-        let service = SqliteSpecificationVersioningService::new(db);
+        let pool = create_test_pool();
+        let service = SqliteSpecificationVersioningService::new(pool);
         service.initialize_tables().unwrap();
 
         let spec1 = create_test_spec();

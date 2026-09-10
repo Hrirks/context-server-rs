@@ -1,18 +1,24 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::models::context::ArchitecturalDecision;
 use crate::repositories::ArchitecturalDecisionRepository;
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// SQLite implementation of ArchitecturalDecisionRepository
 pub struct SqliteArchitecturalDecisionRepository {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqliteArchitecturalDecisionRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection, McpError> {
+        self.pool.checkout().map_err(|e| {
+            McpError::internal_error(format!("Failed to acquire database connection: {e}"), None)
+        })
     }
 }
 
@@ -22,7 +28,8 @@ impl ArchitecturalDecisionRepository for SqliteArchitecturalDecisionRepository {
         &self,
         decision: &ArchitecturalDecision,
     ) -> Result<ArchitecturalDecision, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "INSERT INTO architectural_decisions (id, project_id, decision_title, context, decision, consequences, alternatives_considered, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -46,7 +53,8 @@ impl ArchitecturalDecisionRepository for SqliteArchitecturalDecisionRepository {
         &self,
         project_id: &str,
     ) -> Result<Vec<ArchitecturalDecision>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut decisions = Vec::new();
 
         let mut stmt = db.prepare("SELECT id, project_id, decision_title, context, decision, consequences, alternatives_considered, status, created_at FROM architectural_decisions WHERE project_id = ?")
@@ -79,7 +87,8 @@ impl ArchitecturalDecisionRepository for SqliteArchitecturalDecisionRepository {
     }
 
     async fn find_by_id(&self, id: &str) -> Result<Option<ArchitecturalDecision>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db.prepare("SELECT id, project_id, decision_title, context, decision, consequences, alternatives_considered, status, created_at FROM architectural_decisions WHERE id = ?")
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
@@ -114,7 +123,8 @@ impl ArchitecturalDecisionRepository for SqliteArchitecturalDecisionRepository {
         &self,
         decision: &ArchitecturalDecision,
     ) -> Result<ArchitecturalDecision, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "UPDATE architectural_decisions SET project_id = ?, decision_title = ?, context = ?, decision = ?, consequences = ?, alternatives_considered = ?, status = ? WHERE id = ?",
@@ -134,7 +144,8 @@ impl ArchitecturalDecisionRepository for SqliteArchitecturalDecisionRepository {
     }
 
     async fn delete(&self, id: &str) -> Result<bool, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let rows_affected = db
             .execute("DELETE FROM architectural_decisions WHERE id = ?", [id])

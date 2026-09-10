@@ -1,3 +1,4 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::models::specification::{
     AcceptanceCriterion, CriterionStatus, CriterionType, Priority, ProjectSpecification,
     Requirement, RequirementMetadata, RequirementStatus, SpecContent, SpecFormat, SpecStatus,
@@ -7,24 +8,31 @@ use crate::repositories::SpecificationRepository;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rmcp::model::ErrorData as McpError;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Row};
 use serde_json;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// SQLite implementation of SpecificationRepository
 pub struct SqliteSpecificationRepository {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqliteSpecificationRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection, McpError> {
+        self.pool.checkout().map_err(|e| {
+            McpError::internal_error(format!("Failed to acquire database connection: {e}"), None)
+        })
     }
 
     /// Initialize database tables for specifications
     pub fn initialize_tables(&self) -> Result<(), McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         // Create specifications table
         db.execute(
@@ -472,7 +480,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         &self,
         spec: &ProjectSpecification,
     ) -> Result<ProjectSpecification, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let parsed_sections_json =
             serde_json::to_string(&spec.content.parsed_sections).map_err(|e| {
@@ -523,7 +532,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         &self,
         id: &str,
     ) -> Result<Option<ProjectSpecification>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db.prepare(
             r#"
@@ -551,7 +561,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         &self,
         project_id: &str,
     ) -> Result<Vec<ProjectSpecification>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut specifications = Vec::new();
 
         let mut stmt = db.prepare(
@@ -581,7 +592,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         project_id: &str,
         spec_type: &str,
     ) -> Result<Vec<ProjectSpecification>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut specifications = Vec::new();
 
         let mut stmt = db.prepare(
@@ -610,7 +622,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         &self,
         spec: &ProjectSpecification,
     ) -> Result<ProjectSpecification, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let parsed_sections_json =
             serde_json::to_string(&spec.content.parsed_sections).map_err(|e| {
@@ -657,7 +670,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn delete_specification(&self, id: &str) -> Result<bool, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let rows_affected = db
             .execute("DELETE FROM specifications WHERE id = ?", [id])
@@ -667,7 +681,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn create_requirement(&self, requirement: &Requirement) -> Result<Requirement, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let metadata_json = serde_json::to_string(&requirement.metadata).map_err(|e| {
             McpError::internal_error(
@@ -727,7 +742,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn find_requirement_by_id(&self, id: &str) -> Result<Option<Requirement>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db
             .prepare(
@@ -796,7 +812,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn find_requirements_by_spec(&self, spec_id: &str) -> Result<Vec<Requirement>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut requirements = Vec::new();
 
         let mut stmt = db
@@ -824,7 +841,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn update_requirement(&self, requirement: &Requirement) -> Result<Requirement, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let metadata_json = serde_json::to_string(&requirement.metadata).map_err(|e| {
             McpError::internal_error(
@@ -857,7 +875,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn delete_requirement(&self, id: &str) -> Result<bool, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let rows_affected = db
             .execute("DELETE FROM requirements WHERE id = ?", [id])
@@ -867,7 +886,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn create_task(&self, task: &Task) -> Result<Task, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let metadata_json = serde_json::to_string(&task.metadata).map_err(|e| {
             McpError::internal_error(format!("Failed to serialize task metadata: {}", e), None)
@@ -914,7 +934,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn find_task_by_id(&self, id: &str) -> Result<Option<Task>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db
             .prepare(
@@ -984,7 +1005,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn find_tasks_by_spec(&self, spec_id: &str) -> Result<Vec<Task>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut tasks = Vec::new();
 
         let mut stmt = db
@@ -1017,7 +1039,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         spec_id: &str,
         status: &str,
     ) -> Result<Vec<Task>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut tasks = Vec::new();
 
         let mut stmt = db
@@ -1046,7 +1069,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn update_task(&self, task: &Task) -> Result<Task, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let metadata_json = serde_json::to_string(&task.metadata).map_err(|e| {
             McpError::internal_error(format!("Failed to serialize task metadata: {}", e), None)
@@ -1083,7 +1107,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn delete_task(&self, id: &str) -> Result<bool, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let rows_affected = db
             .execute("DELETE FROM tasks WHERE id = ?", [id])
@@ -1097,7 +1122,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         requirement_id: &str,
         context_id: &str,
     ) -> Result<(), McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "INSERT OR IGNORE INTO requirement_context_links (requirement_id, context_id, created_at) VALUES (?, ?, ?)",
@@ -1108,7 +1134,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
     }
 
     async fn link_task_to_context(&self, task_id: &str, context_id: &str) -> Result<(), McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "INSERT OR IGNORE INTO task_context_links (task_id, context_id, created_at) VALUES (?, ?, ?)",
@@ -1123,7 +1150,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         task_id: &str,
         requirement_id: &str,
     ) -> Result<(), McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "INSERT OR IGNORE INTO task_requirement_links (task_id, requirement_id, created_at) VALUES (?, ?, ?)",
@@ -1138,7 +1166,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         requirement_id: &str,
         context_id: &str,
     ) -> Result<(), McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "DELETE FROM requirement_context_links WHERE requirement_id = ? AND context_id = ?",
@@ -1154,7 +1183,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         task_id: &str,
         context_id: &str,
     ) -> Result<(), McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "DELETE FROM task_context_links WHERE task_id = ? AND context_id = ?",
@@ -1170,7 +1200,8 @@ impl SpecificationRepository for SqliteSpecificationRepository {
         task_id: &str,
         requirement_id: &str,
     ) -> Result<(), McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "DELETE FROM task_requirement_links WHERE task_id = ? AND requirement_id = ?",

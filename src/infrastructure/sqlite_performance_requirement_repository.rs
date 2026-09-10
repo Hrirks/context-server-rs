@@ -1,18 +1,24 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::models::context::PerformanceRequirement;
 use crate::repositories::PerformanceRequirementRepository;
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// SQLite implementation of PerformanceRequirementRepository
 pub struct SqlitePerformanceRequirementRepository {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqlitePerformanceRequirementRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection, McpError> {
+        self.pool.checkout().map_err(|e| {
+            McpError::internal_error(format!("Failed to acquire database connection: {e}"), None)
+        })
     }
 }
 
@@ -22,7 +28,8 @@ impl PerformanceRequirementRepository for SqlitePerformanceRequirementRepository
         &self,
         requirement: &PerformanceRequirement,
     ) -> Result<PerformanceRequirement, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "INSERT INTO performance_requirements (id, project_id, component_area, requirement_type, target_value, optimization_patterns, avoid_patterns, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -45,7 +52,8 @@ impl PerformanceRequirementRepository for SqlitePerformanceRequirementRepository
         &self,
         project_id: &str,
     ) -> Result<Vec<PerformanceRequirement>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut requirements = Vec::new();
 
         let mut stmt = db.prepare("SELECT id, project_id, component_area, requirement_type, target_value, optimization_patterns, avoid_patterns, created_at FROM performance_requirements WHERE project_id = ?")
@@ -77,7 +85,8 @@ impl PerformanceRequirementRepository for SqlitePerformanceRequirementRepository
     }
 
     async fn find_by_id(&self, id: &str) -> Result<Option<PerformanceRequirement>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db.prepare("SELECT id, project_id, component_area, requirement_type, target_value, optimization_patterns, avoid_patterns, created_at FROM performance_requirements WHERE id = ?")
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
@@ -111,7 +120,8 @@ impl PerformanceRequirementRepository for SqlitePerformanceRequirementRepository
         &self,
         requirement: &PerformanceRequirement,
     ) -> Result<PerformanceRequirement, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "UPDATE performance_requirements SET project_id = ?, component_area = ?, requirement_type = ?, target_value = ?, optimization_patterns = ?, avoid_patterns = ? WHERE id = ?",
@@ -130,7 +140,8 @@ impl PerformanceRequirementRepository for SqlitePerformanceRequirementRepository
     }
 
     async fn delete(&self, id: &str) -> Result<bool, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let rows_affected = db
             .execute("DELETE FROM performance_requirements WHERE id = ?", [id])

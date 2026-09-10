@@ -1,19 +1,26 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::models::enhanced_context::{ContextId, ContextType, EnhancedContextItem, ProjectId};
 use crate::repositories::EnhancedContextRepository;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rmcp::model::ErrorData as McpError;
-use rusqlite::{params, Connection, Row};
-use std::sync::{Arc, Mutex};
+use rusqlite::{params, Row};
+use std::sync::Arc;
 
 /// SQLite implementation of EnhancedContextRepository
 pub struct SqliteEnhancedContextRepository {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqliteEnhancedContextRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection, McpError> {
+        self.pool.checkout().map_err(|e| {
+            McpError::internal_error(format!("Failed to acquire database connection: {e}"), None)
+        })
     }
 
     fn db_error(msg: &str, e: impl std::fmt::Display) -> McpError {
@@ -22,8 +29,8 @@ impl SqliteEnhancedContextRepository {
 
     /// Initialize the enhanced context tables
     pub fn initialize_tables(&self) -> Result<(), McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -223,8 +230,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
         &self,
         context: &EnhancedContextItem,
     ) -> Result<EnhancedContextItem, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -269,8 +276,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
     }
 
     async fn find_context_by_id(&self, id: &str) -> Result<Option<EnhancedContextItem>, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -295,8 +302,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
         &self,
         project_id: &str,
     ) -> Result<Vec<EnhancedContextItem>, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -323,8 +330,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
         project_id: &str,
         context_type: ContextType,
     ) -> Result<Vec<EnhancedContextItem>, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -355,8 +362,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
             return self.find_contexts_by_project(project_id).await;
         }
 
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -405,8 +412,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
         &self,
         context: &EnhancedContextItem,
     ) -> Result<EnhancedContextItem, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -451,8 +458,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
     }
 
     async fn delete_context(&self, id: &str) -> Result<bool, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -491,8 +498,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
     }
 
     async fn update_quality_score(&self, context_id: &str, score: f64) -> Result<(), McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 
@@ -506,8 +513,8 @@ impl EnhancedContextRepository for SqliteEnhancedContextRepository {
     }
 
     async fn record_context_usage(&self, context_id: &str) -> Result<(), McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| Self::db_error("Database lock error", e))?;
 

@@ -1,26 +1,32 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::models::framework::FrameworkComponent;
 use crate::repositories::FrameworkRepository;
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// SQLite implementation of FrameworkRepository
 pub struct SqliteFrameworkRepository {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqliteFrameworkRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection, McpError> {
+        self.pool.checkout().map_err(|e| {
+            McpError::internal_error(format!("Failed to acquire database connection: {e}"), None)
+        })
     }
 }
 
 #[async_trait]
 impl FrameworkRepository for SqliteFrameworkRepository {
     async fn create(&self, component: &FrameworkComponent) -> Result<FrameworkComponent, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| McpError::internal_error(format!("Database lock error: {}", e), None))?;
 
@@ -64,8 +70,8 @@ impl FrameworkRepository for SqliteFrameworkRepository {
         &self,
         project_id: &str,
     ) -> Result<Vec<FrameworkComponent>, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| McpError::internal_error(format!("Database lock error: {}", e), None))?;
 
@@ -122,8 +128,8 @@ impl FrameworkRepository for SqliteFrameworkRepository {
         Ok(components)
     }
     async fn find_by_id(&self, id: &str) -> Result<Option<FrameworkComponent>, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| McpError::internal_error(format!("Database lock error: {}", e), None))?;
 
@@ -178,8 +184,8 @@ impl FrameworkRepository for SqliteFrameworkRepository {
         }
     }
     async fn update(&self, component: &FrameworkComponent) -> Result<FrameworkComponent, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| McpError::internal_error(format!("Database lock error: {}", e), None))?;
 
@@ -212,8 +218,8 @@ impl FrameworkRepository for SqliteFrameworkRepository {
         Ok(component.clone())
     }
     async fn delete(&self, id: &str) -> Result<bool, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| McpError::internal_error(format!("Database lock error: {}", e), None))?;
 
@@ -233,8 +239,8 @@ impl FrameworkRepository for SqliteFrameworkRepository {
         project_id: &str,
         layer: &str,
     ) -> Result<Vec<FrameworkComponent>, McpError> {
-        let db = self
-            .db
+        let db = self.checkout()?;
+        let db = db
             .lock()
             .map_err(|e| McpError::internal_error(format!("Database lock error: {}", e), None))?;
 

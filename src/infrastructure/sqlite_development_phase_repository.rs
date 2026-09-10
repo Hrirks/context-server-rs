@@ -1,18 +1,24 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::models::development::{DevelopmentPhase, PhaseStatus};
 use crate::repositories::DevelopmentPhaseRepository;
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// SQLite implementation of DevelopmentPhaseRepository  
 pub struct SqliteDevelopmentPhaseRepository {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqliteDevelopmentPhaseRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection, McpError> {
+        self.pool.checkout().map_err(|e| {
+            McpError::internal_error(format!("Failed to acquire database connection: {e}"), None)
+        })
     }
 
     fn parse_phase_status(status_str: &str) -> PhaseStatus {
@@ -38,7 +44,8 @@ impl SqliteDevelopmentPhaseRepository {
 #[async_trait]
 impl DevelopmentPhaseRepository for SqliteDevelopmentPhaseRepository {
     async fn create(&self, phase: &DevelopmentPhase) -> Result<DevelopmentPhase, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let completion_criteria_json =
             serde_json::to_string(&phase.completion_criteria).map_err(|e| {
@@ -72,7 +79,8 @@ impl DevelopmentPhaseRepository for SqliteDevelopmentPhaseRepository {
         &self,
         project_id: &str,
     ) -> Result<Vec<DevelopmentPhase>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut phases = Vec::new();
 
         let mut stmt = db.prepare("SELECT id, project_id, phase_name, phase_order, status, description, completion_criteria, dependencies, started_at, completed_at, created_at FROM development_phases WHERE project_id = ? ORDER BY phase_order")
@@ -117,7 +125,8 @@ impl DevelopmentPhaseRepository for SqliteDevelopmentPhaseRepository {
     }
 
     async fn find_by_id(&self, id: &str) -> Result<Option<DevelopmentPhase>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db.prepare("SELECT id, project_id, phase_name, phase_order, status, description, completion_criteria, dependencies, started_at, completed_at, created_at FROM development_phases WHERE id = ?")
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
@@ -161,7 +170,8 @@ impl DevelopmentPhaseRepository for SqliteDevelopmentPhaseRepository {
     }
 
     async fn update(&self, phase: &DevelopmentPhase) -> Result<DevelopmentPhase, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let completion_criteria_json =
             serde_json::to_string(&phase.completion_criteria).map_err(|e| {
@@ -191,7 +201,8 @@ impl DevelopmentPhaseRepository for SqliteDevelopmentPhaseRepository {
     }
 
     async fn delete(&self, id: &str) -> Result<bool, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let rows_affected = db
             .execute("DELETE FROM development_phases WHERE id = ?", [id])

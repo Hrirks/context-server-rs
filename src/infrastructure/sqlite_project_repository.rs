@@ -1,25 +1,32 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::models::context::Project;
 use crate::repositories::ProjectRepository;
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// SQLite implementation of ProjectRepository
 pub struct SqliteProjectRepository {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqliteProjectRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection, McpError> {
+        self.pool.checkout().map_err(|e| {
+            McpError::internal_error(format!("Failed to acquire database connection: {e}"), None)
+        })
     }
 }
 
 #[async_trait]
 impl ProjectRepository for SqliteProjectRepository {
     async fn create(&self, project: &Project) -> Result<Project, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "INSERT INTO projects (id, name, description, repository_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -37,7 +44,8 @@ impl ProjectRepository for SqliteProjectRepository {
     }
 
     async fn find_by_id(&self, id: &str) -> Result<Option<Project>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let mut stmt = db.prepare("SELECT id, name, description, repository_url, created_at, updated_at FROM projects WHERE id = ?")
             .map_err(|e| McpError::internal_error(format!("Database error: {}", e), None))?;
@@ -66,7 +74,8 @@ impl ProjectRepository for SqliteProjectRepository {
     }
 
     async fn find_all(&self) -> Result<Vec<Project>, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
         let mut projects = Vec::new();
 
         let mut stmt = db.prepare("SELECT id, name, description, repository_url, created_at, updated_at FROM projects")
@@ -96,7 +105,8 @@ impl ProjectRepository for SqliteProjectRepository {
     }
 
     async fn update(&self, project: &Project) -> Result<Project, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         db.execute(
             "UPDATE projects SET name = ?, description = ?, repository_url = ?, updated_at = ? WHERE id = ?",
@@ -113,7 +123,8 @@ impl ProjectRepository for SqliteProjectRepository {
     }
 
     async fn delete(&self, id: &str) -> Result<bool, McpError> {
-        let db = self.db.lock().unwrap();
+        let db = self.checkout()?;
+        let db = db.lock().unwrap();
 
         let rows_affected = db
             .execute("DELETE FROM projects WHERE id = ?", [id])

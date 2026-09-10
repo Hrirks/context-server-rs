@@ -1,7 +1,9 @@
 // Dependency Injection Container following SOLID principles
 use anyhow::Result;
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::db::connection_pool::ConnectionPool;
 
 // Infrastructure layer
 use crate::infrastructure::{
@@ -45,6 +47,15 @@ use crate::services::{
     SqliteSpecificationVersioningService,
 };
 
+/// Maximum number of SQLite connections the container keeps open.
+///
+/// Each connection gets its own mutex, so up to this many in-process reads can
+/// proceed concurrently (writes are still serialized by SQLite's write lock).
+const POOL_MAX_CONNECTIONS: usize = 8;
+
+/// How long a checkout waits for a free connection before returning an error.
+const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Application container holding all dependencies
 pub struct AppContainer {
     // Services (following Dependency Inversion Principle)
@@ -67,17 +78,20 @@ pub struct AppContainer {
 impl AppContainer {
     /// Create a new application container with all dependencies injected
     pub fn new(db_path: &str) -> Result<Self> {
-        let conn = crate::db::connection::open(db_path)?;
-        let db = Arc::new(Mutex::new(conn));
+        let pool = Arc::new(ConnectionPool::new(
+            db_path,
+            POOL_MAX_CONNECTIONS,
+            POOL_ACQUIRE_TIMEOUT,
+        )?);
 
         // Create repositories (infrastructure layer)
-        let project_repository = SqliteProjectRepository::new(db.clone());
-        let development_phase_repository = SqliteDevelopmentPhaseRepository::new(db.clone());
-        let business_rule_repository = SqliteBusinessRuleRepository::new(db.clone());
+        let project_repository = SqliteProjectRepository::new(pool.clone());
+        let development_phase_repository = SqliteDevelopmentPhaseRepository::new(pool.clone());
+        let business_rule_repository = SqliteBusinessRuleRepository::new(pool.clone());
         let architectural_decision_repository =
-            SqliteArchitecturalDecisionRepository::new(db.clone());
+            SqliteArchitecturalDecisionRepository::new(pool.clone());
         let performance_requirement_repository =
-            SqlitePerformanceRequirementRepository::new(db.clone());
+            SqlitePerformanceRequirementRepository::new(pool.clone());
 
         // Create services (application layer) - dependency injection
         let project_service = Box::new(ProjectServiceImpl::new(project_repository));
@@ -94,7 +108,7 @@ impl AppContainer {
 
         // Create framework service for architecture validation
         // Note: In a real application, you might want to use Arc<dyn FrameworkService> instead
-        let framework_repository_for_validation = SqliteFrameworkRepository::new(db.clone());
+        let framework_repository_for_validation = SqliteFrameworkRepository::new(pool.clone());
         let framework_service_for_validation =
             FrameworkServiceImpl::new(framework_repository_for_validation);
         let architecture_validation_service = Box::new(ArchitectureValidationServiceImpl::new(
@@ -103,24 +117,24 @@ impl AppContainer {
 
         // Create CRUD services with their repositories
         let context_crud_service = Box::new(ContextCrudServiceImpl::new(
-            SqliteBusinessRuleRepository::new(db.clone()),
-            SqliteArchitecturalDecisionRepository::new(db.clone()),
-            SqlitePerformanceRequirementRepository::new(db.clone()),
+            SqliteBusinessRuleRepository::new(pool.clone()),
+            SqliteArchitecturalDecisionRepository::new(pool.clone()),
+            SqlitePerformanceRequirementRepository::new(pool.clone()),
         ));
 
         // Create framework service
-        let framework_repository = SqliteFrameworkRepository::new(db.clone());
+        let framework_repository = SqliteFrameworkRepository::new(pool.clone());
         let framework_service = Box::new(FrameworkServiceImpl::new(framework_repository));
 
         // Create analytics service
-        let analytics_repository = SqliteAnalyticsRepository::new(db.clone());
+        let analytics_repository = SqliteAnalyticsRepository::new(pool.clone());
         // Initialize analytics tables
         analytics_repository.init_tables()?;
         let analytics_service =
             Box::new(DefaultAnalyticsService::new(Box::new(analytics_repository)));
 
         // Create specification services
-        let specification_repository = Arc::new(SqliteSpecificationRepository::new(db.clone()));
+        let specification_repository = Arc::new(SqliteSpecificationRepository::new(pool.clone()));
         specification_repository.initialize_tables()?;
 
         let specification_service = Arc::new(DefaultSpecificationService::new(
@@ -133,12 +147,12 @@ impl AppContainer {
         ));
 
         let specification_versioning_service =
-            Arc::new(SqliteSpecificationVersioningService::new(db.clone()));
+            Arc::new(SqliteSpecificationVersioningService::new(pool.clone()));
         specification_versioning_service.initialize_tables()?;
 
         // Create enhanced context repository and service
         let enhanced_context_repository =
-            Arc::new(SqliteEnhancedContextRepository::new(db.clone()));
+            Arc::new(SqliteEnhancedContextRepository::new(pool.clone()));
         enhanced_context_repository.initialize_tables()?;
 
         let specification_context_linking_service =
@@ -146,9 +160,9 @@ impl AppContainer {
                 specification_repository.clone(),
                 enhanced_context_repository,
                 Arc::new(ContextQueryServiceImpl::new(
-                    SqliteBusinessRuleRepository::new(db.clone()),
-                    SqliteArchitecturalDecisionRepository::new(db.clone()),
-                    SqlitePerformanceRequirementRepository::new(db.clone()),
+                    SqliteBusinessRuleRepository::new(pool.clone()),
+                    SqliteArchitecturalDecisionRepository::new(pool.clone()),
+                    SqlitePerformanceRequirementRepository::new(pool.clone()),
                 )),
             ));
 
@@ -156,7 +170,7 @@ impl AppContainer {
         let specification_analytics_service = Arc::new(DefaultSpecificationAnalyticsService::new(
             specification_repository.clone(),
             Arc::new(DefaultAnalyticsService::new(Box::new(
-                SqliteAnalyticsRepository::new(db.clone()),
+                SqliteAnalyticsRepository::new(pool.clone()),
             ))),
         ));
 

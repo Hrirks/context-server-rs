@@ -1,27 +1,33 @@
+use crate::db::connection_pool::ConnectionPool;
 use crate::services::analytics_service::{
     AnalyticsEvent, AnalyticsEventType, AnalyticsRepository, UsageStatistics,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, OptionalExtension, Row};
 use serde_json;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// SQLite implementation of the analytics repository
 pub struct SqliteAnalyticsRepository {
-    db: Arc<Mutex<Connection>>,
+    pool: Arc<ConnectionPool>,
 }
 
 impl SqliteAnalyticsRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
-        Self { db }
+    pub fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    fn checkout(&self) -> Result<crate::db::connection_pool::PooledConnection> {
+        Ok(self.pool.checkout()?)
     }
 
     /// Initialize the analytics tables
     pub fn init_tables(&self) -> Result<()> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.checkout()?;
+        let conn = conn.lock().unwrap();
 
         // Create analytics_events table
         conn.execute(
@@ -110,7 +116,8 @@ impl SqliteAnalyticsRepository {
 #[async_trait]
 impl AnalyticsRepository for SqliteAnalyticsRepository {
     async fn store_event(&self, event: AnalyticsEvent) -> Result<()> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.checkout()?;
+        let conn = conn.lock().unwrap();
 
         let event_type_str = match event.event_type {
             AnalyticsEventType::ContextQuery => "ContextQuery",
@@ -153,7 +160,8 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
         entity_type: &str,
         entity_id: &str,
     ) -> Result<UsageStatistics> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.checkout()?;
+        let conn = conn.lock().unwrap();
 
         // Get total queries
         let total_queries: u64 = conn.query_row(
@@ -221,7 +229,8 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
     }
 
     async fn get_project_events(&self, project_id: &str) -> Result<Vec<AnalyticsEvent>> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.checkout()?;
+        let conn = conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
             "SELECT id, event_type, project_id, entity_type, entity_id, 
@@ -240,7 +249,8 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
     }
 
     async fn get_global_statistics(&self) -> Result<HashMap<String, serde_json::Value>> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.checkout()?;
+        let conn = conn.lock().unwrap();
 
         let mut stats = HashMap::new();
 
@@ -315,7 +325,8 @@ impl AnalyticsRepository for SqliteAnalyticsRepository {
         start_date: DateTime<Utc>,
         end_date: DateTime<Utc>,
     ) -> Result<serde_json::Value> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.checkout()?;
+        let conn = conn.lock().unwrap();
 
         let start_str = start_date.to_rfc3339();
         let end_str = end_date.to_rfc3339();
