@@ -885,10 +885,12 @@ mod tests {
                 "Test Requirement".to_string(),
                 "This is a test requirement".to_string(),
             );
-            requirement.add_acceptance_criterion(AcceptanceCriterion::new(
+            let mut criterion = AcceptanceCriterion::new(
                 "WHEN user performs action THEN system SHALL respond".to_string(),
                 CriterionType::Functional,
-            ));
+            );
+            criterion.status = CriterionStatus::Satisfied;
+            requirement.add_acceptance_criterion(criterion);
             repo.requirements.push(requirement);
 
             // Add test task

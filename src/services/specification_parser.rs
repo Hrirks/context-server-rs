@@ -173,9 +173,18 @@ impl SpecificationParser {
 
     /// Extract title from parsed content
     fn extract_title(content: &SpecContent, spec_type: &SpecType) -> String {
-        // Try to find title in sections
+        // The document title is the first top-level Markdown heading (`# ...`),
+        // not the first line of its body text.
+        let heading_regex = Regex::new(r"^#\s+(.+)$").unwrap();
+        for line in content.raw_content.lines() {
+            if let Some(captures) = heading_regex.captures(line) {
+                return captures[1].trim().to_string();
+            }
+        }
+
+        // Fall back to an explicit "title" key in parsed sections (YAML/JSON).
         for (key, value) in &content.parsed_sections {
-            if key.contains("title") || key.starts_with("h1-") {
+            if key.contains("title") {
                 return value.lines().next().unwrap_or("Untitled").to_string();
             }
         }
@@ -504,7 +513,7 @@ This section contains requirements.
         .unwrap();
 
         assert_eq!(spec.spec_type, SpecType::Custom("test.md".to_string()));
-        assert_eq!(spec.title, "This is a test specification.");
+        assert_eq!(spec.title, "Test Specification");
         assert_eq!(spec.content.format, SpecFormat::Markdown);
         assert!(spec
             .content

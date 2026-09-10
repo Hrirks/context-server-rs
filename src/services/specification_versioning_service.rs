@@ -575,11 +575,17 @@ mod tests {
     use super::*;
     use crate::models::specification::{SpecContent, SpecFormat, SpecType};
     use rusqlite::Connection;
-    use tempfile::NamedTempFile;
 
     fn create_test_db() -> Arc<Mutex<Connection>> {
-        let temp_file = NamedTempFile::new().unwrap();
-        let db = Connection::open(temp_file.path()).unwrap();
+        // In-memory DB avoids the NamedTempFile lifetime bug where the file is
+        // unlinked while the connection is still open (causing "disk I/O error"
+        // when SQLite tries to create journal sidecars by path on macOS).
+        //
+        // foreign_keys is disabled so the versioning unit tests don't need the
+        // full parent-table graph: the bundled SQLite is compiled with
+        // SQLITE_DEFAULT_FOREIGN_KEYS=1, so FK enforcement is otherwise on.
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
         Arc::new(Mutex::new(db))
     }
 
