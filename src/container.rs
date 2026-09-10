@@ -27,20 +27,22 @@ use crate::services::{
     framework_service::FrameworkServiceImpl,
     // Note: ComponentService removed as it was identical to FrameworkService
     project_service::ProjectServiceImpl,
-    specification_analytics_service::{SpecificationAnalyticsService, DefaultSpecificationAnalyticsService},
+    specification_analytics_service::{
+        DefaultSpecificationAnalyticsService, SpecificationAnalyticsService,
+    },
     ArchitectureValidationService,
     ContextQueryService,
+    DefaultSpecificationContextLinkingService,
+    DefaultSpecificationImportService,
+    DefaultSpecificationService,
     DevelopmentPhaseService,
     FrameworkService,
     ProjectService,
-    DefaultSpecificationService,
-    SpecificationService,
-    DefaultSpecificationImportService,
-    SpecificationImportService,
-    SqliteSpecificationVersioningService,
-    SpecificationVersioningService,
-    DefaultSpecificationContextLinkingService,
     SpecificationContextLinkingService,
+    SpecificationImportService,
+    SpecificationService,
+    SpecificationVersioningService,
+    SqliteSpecificationVersioningService,
 };
 
 /// Application container holding all dependencies
@@ -65,7 +67,7 @@ pub struct AppContainer {
 impl AppContainer {
     /// Create a new application container with all dependencies injected
     pub fn new(db_path: &str) -> Result<Self> {
-        let conn = Connection::open(db_path)?;
+        let conn = crate::db::connection::open(db_path)?;
         let db = Arc::new(Mutex::new(conn));
 
         // Create repositories (infrastructure layer)
@@ -114,40 +116,48 @@ impl AppContainer {
         let analytics_repository = SqliteAnalyticsRepository::new(db.clone());
         // Initialize analytics tables
         analytics_repository.init_tables()?;
-        let analytics_service = Box::new(DefaultAnalyticsService::new(Box::new(analytics_repository)));
+        let analytics_service =
+            Box::new(DefaultAnalyticsService::new(Box::new(analytics_repository)));
 
         // Create specification services
         let specification_repository = Arc::new(SqliteSpecificationRepository::new(db.clone()));
         specification_repository.initialize_tables()?;
-        
-        let specification_service = Arc::new(DefaultSpecificationService::new(specification_repository.clone()));
-        
+
+        let specification_service = Arc::new(DefaultSpecificationService::new(
+            specification_repository.clone(),
+        ));
+
         let specification_import_service = Arc::new(DefaultSpecificationImportService::new(
             specification_service.clone(),
             specification_repository.clone(),
         ));
-        
-        let specification_versioning_service = Arc::new(SqliteSpecificationVersioningService::new(db.clone()));
+
+        let specification_versioning_service =
+            Arc::new(SqliteSpecificationVersioningService::new(db.clone()));
         specification_versioning_service.initialize_tables()?;
 
         // Create enhanced context repository and service
-        let enhanced_context_repository = Arc::new(SqliteEnhancedContextRepository::new(db.clone()));
+        let enhanced_context_repository =
+            Arc::new(SqliteEnhancedContextRepository::new(db.clone()));
         enhanced_context_repository.initialize_tables()?;
-        
-        let specification_context_linking_service = Arc::new(DefaultSpecificationContextLinkingService::new(
-            specification_repository.clone(),
-            enhanced_context_repository,
-            Arc::new(ContextQueryServiceImpl::new(
-                SqliteBusinessRuleRepository::new(db.clone()),
-                SqliteArchitecturalDecisionRepository::new(db.clone()),
-                SqlitePerformanceRequirementRepository::new(db.clone()),
-            )),
-        ));
+
+        let specification_context_linking_service =
+            Arc::new(DefaultSpecificationContextLinkingService::new(
+                specification_repository.clone(),
+                enhanced_context_repository,
+                Arc::new(ContextQueryServiceImpl::new(
+                    SqliteBusinessRuleRepository::new(db.clone()),
+                    SqliteArchitecturalDecisionRepository::new(db.clone()),
+                    SqlitePerformanceRequirementRepository::new(db.clone()),
+                )),
+            ));
 
         // Create specification analytics service
         let specification_analytics_service = Arc::new(DefaultSpecificationAnalyticsService::new(
             specification_repository.clone(),
-            Arc::new(DefaultAnalyticsService::new(Box::new(SqliteAnalyticsRepository::new(db.clone())))),
+            Arc::new(DefaultAnalyticsService::new(Box::new(
+                SqliteAnalyticsRepository::new(db.clone()),
+            ))),
         ));
 
         // Note: component_service removed as it was identical to framework_service

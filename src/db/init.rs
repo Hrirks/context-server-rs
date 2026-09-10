@@ -1,8 +1,11 @@
 // Database initialization logic for context tables
+use crate::db::connection;
 use rusqlite::{Connection, Result};
 
 pub fn init_db(db_path: &str) -> Result<Connection> {
-    let conn = Connection::open(db_path)?;
+    // Goes through the centralized opener so WAL / busy_timeout / foreign_keys
+    // are applied - never a bare Connection::open.
+    let conn = connection::open(db_path)?;
 
     // Projects table
     conn.execute_batch(
