@@ -36,6 +36,27 @@ Benefits over HTTP APIs:
 
 2. The server is now ready to accept MCP client connections.
 
+### Embedding backend configuration
+
+Semantic search and indexing use a text-embedding backend. By default the server
+targets a local [Ollama](https://ollama.com) instance with the `nomic-embed-text`
+model. Both can be overridden with environment variables so you can point at a
+remote Ollama or a different model without rebuilding:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Base URL of the Ollama server |
+| `CONTEXT_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model to request |
+
+```sh
+OLLAMA_BASE_URL=http://ollama.internal:11434 \
+CONTEXT_EMBEDDING_MODEL=mxbai-embed-large \
+cargo run --release
+```
+
+Embeddings are computed lazily — only when an indexing or search tool is invoked —
+so starting the server never requires Ollama to be reachable.
+
 ## 2. Connect MCP Clients
 
 ### Claude Desktop Integration

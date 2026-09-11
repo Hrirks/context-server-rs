@@ -25,19 +25,12 @@ impl OllamaEmbeddingBackend {
         }
     }
 
-    /// Create a backend for a local Ollama at the default address.
-    pub fn local(model: impl Into<String>) -> Self {
-        Self::new("http://localhost:11434", model)
-    }
-
     /// The embedding model this backend targets.
-    #[allow(dead_code)]
     pub fn model(&self) -> &str {
         &self.model
     }
 
     /// The Ollama base URL this backend targets.
-    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }

@@ -61,6 +61,15 @@ const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default Ollama embedding model. Serving locally over plain HTTP.
 const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
 
+/// Default Ollama base URL (its standard local address).
+const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
+
+/// Environment variable overriding the Ollama base URL.
+const ENV_OLLAMA_BASE_URL: &str = "OLLAMA_BASE_URL";
+
+/// Environment variable overriding the embedding model.
+const ENV_EMBEDDING_MODEL: &str = "CONTEXT_EMBEDDING_MODEL";
+
 /// Schema version recorded against stored embeddings.
 const DEFAULT_EMBEDDING_VERSION: &str = "1";
 
@@ -85,23 +94,55 @@ pub struct AppContainer {
     // Note: component_service removed as it was identical to framework_service
 }
 
+/// Resolve the Ollama base URL and model from optional environment values,
+/// falling back to the built-in local defaults. Blank/whitespace-only values
+/// are ignored.
+fn resolve_ollama_config(
+    base_url_override: Option<String>,
+    model_override: Option<String>,
+) -> (String, String) {
+    let base_url = base_url_override
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_OLLAMA_BASE_URL.to_string());
+    let model = model_override
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
+    (base_url, model)
+}
+
 impl AppContainer {
     /// Create a new application container with all dependencies injected.
     ///
-    /// Uses a local Ollama embedding backend by default. Embeddings are computed
-    /// lazily (only when an indexing/search tool runs), so constructing the
-    /// container never makes a network call.
+    /// The Ollama embedding backend is configured from the environment
+    /// (`OLLAMA_BASE_URL`, `CONTEXT_EMBEDDING_MODEL`), falling back to a local
+    /// Ollama with the default model. Embeddings are computed lazily (only when
+    /// an indexing/search tool runs), so constructing the container never makes
+    /// a network call.
     pub fn new(db_path: &str) -> Result<Self> {
-        Self::with_embedding_backend(
-            db_path,
-            Arc::new(OllamaEmbeddingBackend::local(DEFAULT_EMBEDDING_MODEL)),
-        )
+        let (base_url, model) = resolve_ollama_config(
+            std::env::var(ENV_OLLAMA_BASE_URL).ok(),
+            std::env::var(ENV_EMBEDDING_MODEL).ok(),
+        );
+
+        let backend = OllamaEmbeddingBackend::new(base_url, model.clone());
+        tracing::info!(
+            base_url = backend.base_url(),
+            model = backend.model(),
+            "Configured Ollama embedding backend"
+        );
+
+        Self::with_embedding_backend(db_path, Arc::new(backend), model)
     }
 
     /// Create a container with a custom embedding backend (tests, non-Ollama).
+    ///
+    /// `embedding_model` is the label recorded against persisted embeddings; it
+    /// must match the model the backend actually serves so that search compares
+    /// vectors from the same model.
     pub fn with_embedding_backend(
         db_path: &str,
         embedding_backend: Arc<dyn EmbeddingService>,
+        embedding_model: impl Into<String>,
     ) -> Result<Self> {
         let pool = Arc::new(ConnectionPool::new(
             db_path,
@@ -189,7 +230,7 @@ impl AppContainer {
         let embedding_store_service = Arc::new(EmbeddingStoreService::new(
             embedding_repository,
             embedding_backend,
-            DEFAULT_EMBEDDING_MODEL,
+            embedding_model,
             DEFAULT_EMBEDDING_VERSION,
         ));
 
@@ -230,5 +271,54 @@ impl ContainerFactory {
     #[allow(dead_code)]
     pub fn create(db_path: &str) -> Result<AppContainer> {
         AppContainer::new(db_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_ollama_config_defaults_when_unset() {
+        let (base_url, model) = resolve_ollama_config(None, None);
+        assert_eq!(base_url, DEFAULT_OLLAMA_BASE_URL);
+        assert_eq!(model, DEFAULT_EMBEDDING_MODEL);
+    }
+
+    #[test]
+    fn resolve_ollama_config_prefers_non_blank_overrides() {
+        let (base_url, model) = resolve_ollama_config(
+            Some("http://ollama.internal:11434".to_string()),
+            Some("mxbai-embed-large".to_string()),
+        );
+        assert_eq!(base_url, "http://ollama.internal:11434");
+        assert_eq!(model, "mxbai-embed-large");
+    }
+
+    #[test]
+    fn resolve_ollama_config_ignores_blank_overrides() {
+        let (base_url, model) = resolve_ollama_config(Some("   ".to_string()), Some(String::new()));
+        assert_eq!(base_url, DEFAULT_OLLAMA_BASE_URL);
+        assert_eq!(model, DEFAULT_EMBEDDING_MODEL);
+    }
+
+    #[test]
+    fn overridden_base_url_and_model_reach_the_backend() {
+        let (base_url, model) = resolve_ollama_config(
+            Some("http://example.test:1234".to_string()),
+            Some("custom-model".to_string()),
+        );
+
+        let backend = OllamaEmbeddingBackend::new(base_url, model);
+        assert_eq!(backend.base_url(), "http://example.test:1234");
+        assert_eq!(backend.model(), "custom-model");
+    }
+
+    #[test]
+    fn default_backend_targets_local_ollama() {
+        let (base_url, model) = resolve_ollama_config(None, None);
+        let backend = OllamaEmbeddingBackend::new(base_url, model);
+        assert_eq!(backend.base_url(), DEFAULT_OLLAMA_BASE_URL);
+        assert_eq!(backend.model(), DEFAULT_EMBEDDING_MODEL);
     }
 }
