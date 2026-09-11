@@ -101,7 +101,12 @@ pub struct GraphStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexReport {
     pub project_id: String,
+    /// Number of files parsed and (re)indexed this run.
     pub files_indexed: usize,
+    /// Number of files that were unchanged and skipped.
+    pub files_skipped: usize,
+    /// Number of previously-indexed files no longer present on disk.
+    pub files_removed: usize,
     pub symbols_indexed: usize,
     pub edges_indexed: usize,
     /// Number of symbols whose text was embedded for semantic search.

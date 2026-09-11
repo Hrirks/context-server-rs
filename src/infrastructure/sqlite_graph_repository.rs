@@ -287,6 +287,74 @@ impl GraphRepository for SqliteGraphRepository {
         Ok(())
     }
 
+    async fn list_symbols(&self, project_id: &str) -> Result<Vec<GraphSymbol>, McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        let query = format!("SELECT {SYMBOL_COLUMNS} FROM context_symbols WHERE project_id = ?1");
+        let mut stmt = db.prepare(&query).map_err(|e| {
+            McpError::internal_error(format!("Failed to prepare symbol list: {e}"), None)
+        })?;
+
+        let symbols = stmt
+            .query_map(params![project_id], row_to_symbol)
+            .map_err(|e| McpError::internal_error(format!("Failed to list symbols: {e}"), None))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| McpError::internal_error(format!("Failed to read symbols: {e}"), None))?;
+
+        Ok(symbols)
+    }
+
+    async fn delete_symbols_for_file(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<String>, McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        let ids: Vec<String> = {
+            let mut stmt = db
+                .prepare("SELECT id FROM context_symbols WHERE project_id = ?1 AND file_path = ?2")
+                .map_err(|e| {
+                    McpError::internal_error(
+                        format!("Failed to prepare symbol id query: {e}"),
+                        None,
+                    )
+                })?;
+            let rows = stmt
+                .query_map(params![project_id, file_path], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|e| {
+                    McpError::internal_error(format!("Failed to query symbol ids: {e}"), None)
+                })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+                McpError::internal_error(format!("Failed to read symbol ids: {e}"), None)
+            })?
+        };
+
+        db.execute(
+            "DELETE FROM symbol_edges \
+             WHERE source_id IN (SELECT id FROM context_symbols WHERE project_id = ?1 AND file_path = ?2) \
+                OR target_id IN (SELECT id FROM context_symbols WHERE project_id = ?1 AND file_path = ?2)",
+            params![project_id, file_path],
+        )
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to delete file edges: {e}"), None)
+        })?;
+
+        db.execute(
+            "DELETE FROM context_symbols WHERE project_id = ?1 AND file_path = ?2",
+            params![project_id, file_path],
+        )
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to delete file symbols: {e}"), None)
+        })?;
+
+        Ok(ids)
+    }
+
     async fn stats(&self, project_id: &str) -> Result<GraphStats, McpError> {
         let conn = self.checkout()?;
         let db = conn.lock().unwrap();

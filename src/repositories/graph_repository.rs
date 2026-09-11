@@ -25,8 +25,20 @@ pub trait GraphRepository: Send + Sync {
     /// All edges leaving a symbol.
     async fn find_outgoing_edges(&self, symbol_id: &str) -> Result<Vec<GraphEdge>, McpError>;
 
-    /// Remove a project's symbols and edges (used before re-indexing).
+    /// Remove a project's symbols and edges (used before a full re-index).
+    #[allow(dead_code)]
     async fn delete_project(&self, project_id: &str) -> Result<(), McpError>;
+
+    /// Load every symbol for a project.
+    async fn list_symbols(&self, project_id: &str) -> Result<Vec<GraphSymbol>, McpError>;
+
+    /// Remove every symbol belonging to `file_path` and all edges touching them,
+    /// returning the removed symbol ids so callers can also delete embeddings.
+    async fn delete_symbols_for_file(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<String>, McpError>;
 
     /// Count symbols and edges for a project.
     async fn stats(&self, project_id: &str) -> Result<GraphStats, McpError>;

@@ -8,7 +8,7 @@
 //! whole files.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rmcp::model::ErrorData as McpError;
@@ -44,9 +44,15 @@ impl GraphMemoryService {
 
     /// Discover, parse, and index every supported source under `root`.
     ///
-    /// The project's previous graph is cleared first, so repeated indexing is
-    /// idempotent. Embedding is best-effort: an unavailable embedding backend
+    /// Incremental: each file is hashed and only new/changed files are re-parsed
+    /// and re-embedded; unchanged files are skipped and deleted files are pruned.
+    /// Cross-file call/inherit/reference edges are resolved against the full
+    /// project symbol set. Embedding is best-effort: an unavailable backend
     /// degrades to a graph-only index rather than failing the whole run.
+    ///
+    /// Note: when a file changes, edges that point *into* it from unchanged files
+    /// are dropped (those source files are not re-parsed) and restored the next
+    /// time those source files change.
     pub async fn index_directory(
         &self,
         project_id: &str,
@@ -57,21 +63,100 @@ impl GraphMemoryService {
             McpError::internal_error(format!("Failed to discover sources: {e}"), None)
         })?;
 
-        self.repository.delete_project(project_id).await?;
+        // Stable content hash per discovered file. `None` means the file could
+        // not be read; it is treated as changed so the parse path surfaces the
+        // real error.
+        let mut file_hashes: HashMap<String, Option<String>> = HashMap::new();
+        for file in &files {
+            let path = file.display().to_string();
+            let hash = match tokio::fs::read_to_string(file).await {
+                Ok(content) => Some(content_hash(&content)),
+                Err(_) => None,
+            };
+            file_hashes.insert(path, hash);
+        }
+
+        // Existing file-level state: file symbols carry their last content hash
+        // in `text`, so changed/unchanged is decidable without re-parsing.
+        let existing = self.repository.list_symbols(project_id).await?;
+        let prev_file_hash: HashMap<String, String> = existing
+            .iter()
+            .filter(|s| s.kind == "file")
+            .map(|s| (s.file_path.clone(), s.text.clone()))
+            .collect();
+
+        let current_paths: HashSet<String> =
+            files.iter().map(|f| f.display().to_string()).collect();
+
+        let mut changed_files: Vec<PathBuf> = Vec::new();
+        let mut unchanged_paths: HashSet<String> = HashSet::new();
+        let mut files_skipped = 0usize;
+        let mut files_removed = 0usize;
+
+        for file in &files {
+            let path = file.display().to_string();
+            let unchanged = match (
+                file_hashes.get(&path).and_then(|h| h.clone()),
+                prev_file_hash.get(&path),
+            ) {
+                (Some(current), Some(prev)) => current == *prev,
+                _ => false,
+            };
+            if unchanged {
+                unchanged_paths.insert(path);
+                files_skipped += 1;
+            } else {
+                changed_files.push(file.clone());
+            }
+        }
+
+        let mut deleted_paths: Vec<String> = Vec::new();
+        for path in prev_file_hash.keys() {
+            if !current_paths.contains(path) {
+                deleted_paths.push(path.clone());
+            }
+        }
+
+        // Prune symbols/edges/embeddings for deleted and changed files.
+        for path in &deleted_paths {
+            let removed = self
+                .repository
+                .delete_symbols_for_file(project_id, path)
+                .await?;
+            self.delete_embeddings(&removed).await;
+            files_removed += 1;
+        }
+        for file in &changed_files {
+            let path = file.display().to_string();
+            let removed = self
+                .repository
+                .delete_symbols_for_file(project_id, &path)
+                .await?;
+            self.delete_embeddings(&removed).await;
+        }
+
+        // Seed the name index from unchanged files so cross-file references in
+        // newly indexed files resolve against the rest of the project.
+        let mut name_index: HashMap<String, Vec<String>> = HashMap::new();
+        for sym in &existing {
+            if unchanged_paths.contains(&sym.file_path) && kind_indexable(&sym.kind) {
+                name_index
+                    .entry(sym.name.to_lowercase())
+                    .or_default()
+                    .push(sym.id.clone());
+            }
+        }
 
         let mut symbols_indexed = 0usize;
         let mut edges_indexed = 0usize;
         let mut embedded = 0usize;
         let mut embed_failures = 0usize;
 
-        // Lowercased name -> symbol ids, for resolving cross-file call/inherit/
-        // reference names into edges once every symbol is known.
-        let mut name_index: HashMap<String, Vec<String>> = HashMap::new();
         // References whose target id cannot be resolved until the whole project
         // has been indexed (a call may target a symbol defined in another file).
         let mut deferred: Vec<DeferredEdge> = Vec::new();
 
-        for file in &files {
+        for file in &changed_files {
             let Some(language) = SourceLanguage::from_path(file) else {
                 continue;
             };
@@ -89,7 +174,10 @@ impl GraphMemoryService {
                 signature: file_path.clone(),
                 start_line: 1,
                 end_line: 1,
-                text: String::new(),
+                text: file_hashes
+                    .get(&file_path)
+                    .and_then(|h| h.clone())
+                    .unwrap_or_default(),
                 created_at: now.clone(),
             };
             self.repository.upsert_symbol(&file_symbol).await?;
@@ -230,7 +318,9 @@ impl GraphMemoryService {
             Some(project_id),
             "index",
             serde_json::json!({
-                "files": files.len(),
+                "files_indexed": changed_files.len(),
+                "files_skipped": files_skipped,
+                "files_removed": files_removed,
                 "symbols": symbols_indexed,
                 "edges": edges_indexed,
                 "embedded": embedded,
@@ -240,7 +330,9 @@ impl GraphMemoryService {
 
         Ok(IndexReport {
             project_id: project_id.to_string(),
-            files_indexed: files.len(),
+            files_indexed: changed_files.len(),
+            files_skipped,
+            files_removed,
             symbols_indexed,
             edges_indexed,
             embedded,
@@ -342,6 +434,16 @@ impl GraphMemoryService {
         self.repository.recent_conversation(session_id, limit).await
     }
 
+    async fn delete_embeddings(&self, ids: &[String]) {
+        if let Some(store) = &self.embedding_store {
+            for id in ids {
+                if let Err(e) = store.delete_for_context(id).await {
+                    tracing::warn!("Failed to delete embedding for {id}: {e}");
+                }
+            }
+        }
+    }
+
     async fn record_delta(
         &self,
         session_id: &str,
@@ -410,6 +512,12 @@ fn kind_str(kind: ChunkKind) -> &'static str {
 /// not callable or referenceable types.
 fn indexable_kind(kind: ChunkKind) -> bool {
     !matches!(kind, ChunkKind::Package | ChunkKind::Import)
+}
+
+/// Whether a stored symbol kind can be the target of a call/inherit/reference
+/// edge. Mirrors [`indexable_kind`] for the string kinds persisted in the graph.
+fn kind_indexable(kind: &str) -> bool {
+    !matches!(kind, "file" | "package" | "import")
 }
 
 /// The display name for a chunk; derived from the parse when the grammar did
@@ -628,5 +736,44 @@ mod tests {
         let deltas = service.recent_deltas("sess", 10).await.unwrap();
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].event_type, "index");
+    }
+
+    #[tokio::test]
+    async fn incremental_index_skips_unchanged_and_prunes_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(dir.path(), "a.go", "package main\nfunc a() {}\n");
+        write_source(dir.path(), "b.go", "package main\nfunc b() {}\n");
+
+        let service = build(false);
+
+        let first = service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+        assert_eq!(first.files_indexed, 2);
+        assert_eq!(first.files_skipped, 0);
+        assert_eq!(first.files_removed, 0);
+
+        let second = service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+        assert_eq!(second.files_indexed, 0);
+        assert_eq!(second.files_skipped, 2);
+        assert_eq!(second.files_removed, 0);
+
+        write_source(dir.path(), "a.go", "package main\nfunc aChanged() {}\n");
+        std::fs::remove_file(dir.path().join("b.go")).unwrap();
+
+        let third = service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+        assert_eq!(third.files_indexed, 1);
+        assert_eq!(third.files_skipped, 0);
+        assert_eq!(third.files_removed, 1);
+
+        let stats = service.stats("p1").await.unwrap();
+        assert_eq!(stats.symbol_count, 3); // file + package + function (aChanged)
     }
 }
