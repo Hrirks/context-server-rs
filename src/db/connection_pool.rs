@@ -13,6 +13,7 @@
 
 use crate::db::connection;
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -28,8 +29,7 @@ pub enum PoolError {
 }
 
 /// A point-in-time snapshot of pool usage.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PoolStats {
     pub total: usize,
     pub idle: usize,

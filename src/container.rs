@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::db::connection_pool::ConnectionPool;
+use crate::db::connection_pool::{ConnectionPool, PoolStats};
 use crate::embedding::{EmbeddingService, OllamaEmbeddingBackend};
 
 // Infrastructure layer
@@ -91,6 +91,8 @@ pub struct AppContainer {
     pub specification_analytics_service: Arc<dyn SpecificationAnalyticsService>,
     pub embedding_store_service: Arc<EmbeddingStoreService>,
     pub graph_memory_service: Arc<GraphMemoryService>,
+    /// The shared SQLite connection pool, kept for pool-utilization reporting.
+    pub connection_pool: Arc<ConnectionPool>,
     // Note: component_service removed as it was identical to framework_service
 }
 
@@ -258,8 +260,14 @@ impl AppContainer {
             specification_analytics_service,
             embedding_store_service,
             graph_memory_service,
+            connection_pool: pool.clone(),
             // Note: component_service removed
         })
+    }
+
+    /// A point-in-time snapshot of SQLite connection-pool utilization.
+    pub fn pool_stats(&self) -> PoolStats {
+        self.connection_pool.stats()
     }
 }
 

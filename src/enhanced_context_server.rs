@@ -1291,6 +1291,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "9. Optimization: Use get_usage_analytics to understand usage patterns".to_string(),
                         "10. Maintenance: Use cache_management to optimize performance as needed".to_string(),
                     ],
+                    database_pool: self.container.pool_stats(),
                 };
 
                 let content = serde_json::to_string_pretty(&capabilities).map_err(|e| {

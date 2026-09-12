@@ -1,3 +1,4 @@
+use crate::db::connection_pool::PoolStats;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +24,8 @@ pub struct ServerCapabilitiesInfo {
     pub mcp_tools: Vec<ToolInfo>,
     pub usage_examples: Vec<UsageExample>,
     pub recommended_workflow: Vec<String>,
+    /// Live SQLite connection-pool utilization at the time of the request.
+    pub database_pool: PoolStats,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
