@@ -1,5 +1,5 @@
 use crate::services::specification_analytics_service::SpecificationAnalyticsService;
-use rmcp::model::{CallToolResult, Content, ErrorData as McpError, Tool};
+use rmcp::model::{CallToolResult, ContentBlock, ErrorData as McpError, Tool};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -17,10 +17,7 @@ impl SpecificationAnalyticsTools {
     #[allow(dead_code)]
     pub fn get_tools() -> Vec<Tool> {
         vec![
-            Tool {
-                name: "track_requirements_progress".into(),
-                description: Some("Track progress for all requirements in a project, including completion percentages, linked tasks, and acceptance criteria status".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("track_requirements_progress", "Track progress for all requirements in a project, including completion percentages, linked tasks, and acceptance criteria status", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {
@@ -29,13 +26,8 @@ impl SpecificationAnalyticsTools {
                         }
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "track_tasks_progress".into(),
-                description: Some("Track progress for all tasks in a project, including status, completion percentage, time tracking, and dependencies".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("track_tasks_progress", "Track progress for all tasks in a project, including status, completion percentage, time tracking, and dependencies", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {
@@ -44,13 +36,8 @@ impl SpecificationAnalyticsTools {
                         }
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "analyze_specification_completeness".into(),
-                description: Some("Analyze completeness of specifications in a project, including content quality, missing sections, and recommendations".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("analyze_specification_completeness", "Analyze completeness of specifications in a project, including content quality, missing sections, and recommendations", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {
@@ -59,13 +46,8 @@ impl SpecificationAnalyticsTools {
                         }
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "calculate_development_velocity".into(),
-                description: Some("Calculate development velocity metrics based on task and requirement completion over a specified time period".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("calculate_development_velocity", "Calculate development velocity metrics based on task and requirement completion over a specified time period", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {
@@ -81,13 +63,8 @@ impl SpecificationAnalyticsTools {
                         }
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "generate_specification_health_report".into(),
-                description: Some("Generate a comprehensive health report for all specifications in a project, including progress, completeness, velocity, and recommendations".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("generate_specification_health_report", "Generate a comprehensive health report for all specifications in a project, including progress, completeness, velocity, and recommendations", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {
@@ -96,9 +73,7 @@ impl SpecificationAnalyticsTools {
                         }
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
         ]
     }
 
@@ -161,7 +136,7 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Requirements Progress Tracking for Project: {}\n\n{}",
             project_id,
             serde_json::to_string_pretty(&result).unwrap()
@@ -202,7 +177,7 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Tasks Progress Tracking for Project: {}\n\n{}",
             project_id,
             serde_json::to_string_pretty(&result).unwrap()
@@ -240,7 +215,7 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Specification Completeness Analysis for Project: {}\n\n{}",
             project_id,
             serde_json::to_string_pretty(&result).unwrap()
@@ -294,7 +269,7 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Development Velocity Metrics for Project: {} (Last {} days)\n\n{}",
             project_id,
             days,
@@ -340,7 +315,7 @@ impl SpecificationAnalyticsTools {
             }
         });
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Specification Health Report for Project: {}\n\n{}",
             project_id,
             serde_json::to_string_pretty(&result).unwrap()

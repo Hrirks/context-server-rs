@@ -38,33 +38,32 @@ impl EnhancedContextMcpServer {
 
 impl ServerHandler for EnhancedContextMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .enable_resources()
-                .build(),
-            server_info: Implementation {
-                name: "enhanced-context-server-rs".to_string(),
-                version: "0.2.0".to_string(),
-            },
-            instructions: Some("Enhanced Context Server with comprehensive CRUD operations for AI Code Generation. Provides curated project context including business rules, architectural decisions, security policies, project conventions, feature contexts, and framework-agnostic components.".to_string()),
-        }
+        // ServerInfo is an alias for the non-exhaustive InitializeResult in rmcp 3.x,
+        // so it must be built by defaulting and mutating rather than as a literal.
+        let mut implementation = Implementation::default();
+        implementation.name = "enhanced-context-server-rs".to_string();
+        implementation.version = "0.2.0".to_string();
+        let mut info = ServerInfo::default();
+        info.protocol_version = ProtocolVersion::default();
+        info.capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .build();
+        info.server_info = implementation;
+        info.instructions = Some("Enhanced Context Server with comprehensive CRUD operations for AI Code Generation. Provides curated project context including business rules, architectural decisions, security policies, project conventions, feature contexts, and framework-agnostic components.".to_string());
+        info
     }
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         tracing::debug!("Received list_tools request for enhanced server");
 
         let tools = vec![
             // Core Context Query Tool
-            Tool {
-                name: "query_context".into(),
-                description: Some("Assemble the context needed for a development task: curated project metadata (business rules, architectural decisions, performance requirements) plus a token-budgeted bundle of the actual code. Code is retrieved by semantic search over the indexed project, expanded one hop through the call/inheritance graph, ranked by relevance and graph distance, and cut at token_budget. Prefer this over reading files: it returns the relevant symbols' source instead of whole files.".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("query_context", "Assemble the context needed for a development task: curated project metadata (business rules, architectural decisions, performance requirements) plus a token-budgeted bundle of the actual code. Code is retrieved by semantic search over the indexed project, expanded one hop through the call/inheritance graph, ranked by relevance and graph distance, and cut at token_budget. Prefer this over reading files: it returns the relevant symbols' source instead of whole files.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -76,49 +75,29 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
 
             // Project Management (kept for convenience)
-            Tool {
-                name: "list_projects".into(),
-                description: Some("List all available projects".into()),
-                input_schema: Arc::new(serde_json::json!({"type": "object", "properties": {}}).as_object().unwrap().clone()),
-                annotations: None,
-            },
+            Tool::new("list_projects", "List all available projects", Arc::new(serde_json::json!({"type": "object", "properties": {}}).as_object().unwrap().clone())),
 
             // Universal CRUD Operations - Single tools that handle all entity types
-            Tool {
-                name: "get_entity".into(),
-                description: Some("Get any entity by ID and type (universal getter)".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("get_entity", "Get any entity by ID and type (universal getter)", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "entity_type": {"type": "string", "enum": ["project", "business_rule", "architectural_decision", "performance_requirement", "security_policy", "framework_component", "development_phase", "feature_context"], "description": "The type of entity to retrieve"},
                         "id": {"type": "string", "description": "The ID of the entity"}
                     },
                     "required": ["entity_type", "id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "create_entity".into(),
-                description: Some("Create any entity (project, business rule, architectural decision, etc.)".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("create_entity", "Create any entity (project, business rule, architectural decision, etc.)", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "entity_type": {"type": "string", "enum": ["project", "business_rule", "architectural_decision", "performance_requirement", "security_policy", "framework_component", "development_phase", "feature_context"], "description": "The type of entity to create"},
                         "data": {"type": "object", "description": "The entity data as JSON object"}
                     },
                     "required": ["entity_type", "data"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "update_entity".into(),
-                description: Some("Update any entity by ID and type".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("update_entity", "Update any entity by ID and type", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "entity_type": {"type": "string", "enum": ["project", "business_rule", "architectural_decision", "performance_requirement", "security_policy", "framework_component", "development_phase", "feature_context"], "description": "The type of entity to update"},
@@ -126,26 +105,16 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "data": {"type": "object", "description": "The updated entity data as JSON object"}
                     },
                     "required": ["entity_type", "id", "data"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "delete_entity".into(),
-                description: Some("Delete any entity by ID and type".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("delete_entity", "Delete any entity by ID and type", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "entity_type": {"type": "string", "enum": ["project", "business_rule", "architectural_decision", "performance_requirement", "security_policy", "framework_component", "development_phase", "feature_context"], "description": "The type of entity to delete"},
                         "id": {"type": "string", "description": "The ID of the entity to delete"}
                     },
                     "required": ["entity_type", "id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "list_entities".into(),
-                description: Some("List entities by type and optional project filter".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("list_entities", "List entities by type and optional project filter", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "entity_type": {"type": "string", "enum": ["project", "business_rule", "architectural_decision", "performance_requirement", "security_policy", "framework_component", "development_phase", "feature_context"], "description": "The type of entities to list"},
@@ -153,15 +122,10 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "architecture_layer": {"type": "string", "description": "Optional architecture layer to filter framework components by (only applies to framework_component entity type)"}
                     },
                     "required": ["entity_type"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
 
             // Combined Operations - Higher-level tools for complex operations
-            Tool {
-                name: "manage_project".into(),
-                description: Some("Comprehensive project management (create, update, delete, get)".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("manage_project", "Comprehensive project management (create, update, delete, get)", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "action": {"type": "string", "enum": ["create", "update", "delete", "get", "list"], "description": "The action to perform"},
@@ -169,15 +133,10 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "data": {"type": "object", "description": "Project data (required for create, update)"}
                     },
                     "required": ["action"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
 
             // Bulk Operations - Essential for efficiency
-            Tool {
-                name: "bulk_create_components".into(),
-                description: Some("Create multiple framework components in bulk".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("bulk_create_components", "Create multiple framework components in bulk", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -196,13 +155,8 @@ impl ServerHandler for EnhancedContextMcpServer {
                         }
                     },
                     "required": ["project_id", "components"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "bulk_update_components".into(),
-                description: Some("Update multiple framework components in bulk".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("bulk_update_components", "Update multiple framework components in bulk", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "components": {
@@ -221,27 +175,17 @@ impl ServerHandler for EnhancedContextMcpServer {
                         }
                     },
                     "required": ["components"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "bulk_delete_components".into(),
-                description: Some("Delete multiple framework components in bulk".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("bulk_delete_components", "Delete multiple framework components in bulk", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "component_ids": {"type": "array", "items": {"type": "string"}, "description": "Array of component IDs to delete"}
                     },
                     "required": ["component_ids"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
 
             // Advanced Operations - Specific high-value tools
-            Tool {
-                name: "bulk_operations".into(),
-                description: Some("Perform bulk operations on multiple entities".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("bulk_operations", "Perform bulk operations on multiple entities", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "operation": {"type": "string", "enum": ["create", "update", "delete"], "description": "The bulk operation to perform"},
@@ -261,48 +205,28 @@ impl ServerHandler for EnhancedContextMcpServer {
                         }
                     },
                     "required": ["operation", "entity_type", "data"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "validate_architecture".into(),
-                description: Some("Validate Clean Architecture rules and detect violations".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("validate_architecture", "Validate Clean Architecture rules and detect violations", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to validate"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "get_server_capabilities".into(),
-                description: Some("Get comprehensive information about server features, database tables, and available tools".into()),
-                input_schema: Arc::new(serde_json::json!({"type": "object", "properties": {}}).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
+            Tool::new("get_server_capabilities", "Get comprehensive information about server features, database tables, and available tools", Arc::new(serde_json::json!({"type": "object", "properties": {}}).as_object().unwrap().clone())),
 
             // Cache Management Tools
-            Tool {
-                name: "cache_management".into(),
-                description: Some("Manage cache and temporary data (clear project, clear all)".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("cache_management", "Manage cache and temporary data (clear project, clear all)", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "action": {"type": "string", "enum": ["clear_project", "clear_all"], "description": "The cache action to perform"},
                         "project_id": {"type": "string", "description": "Project ID (required for clear_project action)"}
                     },
                     "required": ["action"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
 
             // Analytics MCP Tools
-            Tool {
-                name: "get_usage_analytics".into(),
-                description: Some("Retrieve usage statistics for entities or global analytics".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("get_usage_analytics", "Retrieve usage statistics for entities or global analytics", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "scope": {"type": "string", "enum": ["global", "entity"], "description": "Scope of analytics to retrieve"},
@@ -310,25 +234,15 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "entity_id": {"type": "string", "description": "Entity ID (required for entity scope)"}
                     },
                     "required": ["scope"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "get_context_insights".into(),
-                description: Some("Get project-level analytics and insights".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("get_context_insights", "Get project-level analytics and insights", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to analyze"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "generate_quality_report".into(),
-                description: Some("Generate a context health assessment and quality report".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("generate_quality_report", "Generate a context health assessment and quality report", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "start_date": {"type": "string", "format": "date-time", "description": "Start date for the report (ISO 8601 format)"},
@@ -336,13 +250,8 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "project_id": {"type": "string", "description": "Optional project ID to filter the report"}
                     },
                     "required": ["start_date", "end_date"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "export_analytics_data".into(),
-                description: Some("Export analytics data for data portability and external analysis".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("export_analytics_data", "Export analytics data for data portability and external analysis", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "format": {"type": "string", "enum": ["json", "csv"], "description": "Export format", "default": "json"},
@@ -352,151 +261,91 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "event_types": {"type": "array", "items": {"type": "string"}, "description": "Optional array of event types to include"}
                     },
                     "required": ["start_date", "end_date"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
 
             // Specification Import and Management Tools
-            Tool {
-                name: "scan_specifications".into(),
-                description: Some("Scan and import all Kiro specifications from .kiro/specs directory".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("scan_specifications", "Scan and import all Kiro specifications from .kiro/specs directory", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "base_path": {"type": "string", "description": "Base path to scan for specifications (defaults to .kiro/specs)", "default": ".kiro/specs"}
                     }
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "import_specification".into(),
-                description: Some("Import a single specification file".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("import_specification", "Import a single specification file", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "file_path": {"type": "string", "description": "Path to the specification file to import"}
                     },
                     "required": ["file_path"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "validate_specification".into(),
-                description: Some("Validate a specification file and return validation issues".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("validate_specification", "Validate a specification file and return validation issues", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "file_path": {"type": "string", "description": "Path to the specification file to validate"}
                     },
                     "required": ["file_path"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "start_spec_monitoring".into(),
-                description: Some("Start monitoring .kiro/specs directory for changes".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("start_spec_monitoring", "Start monitoring .kiro/specs directory for changes", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "base_path": {"type": "string", "description": "Base path to monitor (defaults to .kiro/specs)", "default": ".kiro/specs"}
                     }
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "get_specification_versions".into(),
-                description: Some("Get all versions of a specification".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("get_specification_versions", "Get all versions of a specification", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "spec_id": {"type": "string", "description": "ID of the specification"}
                     },
                     "required": ["spec_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "compare_specification_versions".into(),
-                description: Some("Compare two versions of a specification".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("compare_specification_versions", "Compare two versions of a specification", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "version1_id": {"type": "string", "description": "ID of the first version"},
                         "version2_id": {"type": "string", "description": "ID of the second version"}
                     },
                     "required": ["version1_id", "version2_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
 
             // Specification Analytics Tools
-            Tool {
-                name: "track_requirements_progress".into(),
-                description: Some("Track progress for all requirements in a project, including completion percentages, linked tasks, and acceptance criteria status".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("track_requirements_progress", "Track progress for all requirements in a project, including completion percentages, linked tasks, and acceptance criteria status", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to track requirements progress for"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "track_tasks_progress".into(),
-                description: Some("Track progress for all tasks in a project, including status, completion percentage, time tracking, and dependencies".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("track_tasks_progress", "Track progress for all tasks in a project, including status, completion percentage, time tracking, and dependencies", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to track tasks progress for"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "analyze_specification_completeness".into(),
-                description: Some("Analyze completeness of specifications in a project, including content quality, missing sections, and recommendations".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("analyze_specification_completeness", "Analyze completeness of specifications in a project, including content quality, missing sections, and recommendations", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to analyze specification completeness for"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "calculate_development_velocity".into(),
-                description: Some("Calculate development velocity metrics based on task and requirement completion over a specified time period".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("calculate_development_velocity", "Calculate development velocity metrics based on task and requirement completion over a specified time period", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to calculate velocity for"},
                         "days": {"type": "integer", "description": "Number of days to look back for velocity calculation", "default": 30, "minimum": 1, "maximum": 365}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "generate_specification_health_report".into(),
-                description: Some("Generate a comprehensive health report for all specifications in a project, including progress, completeness, velocity, and recommendations".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("generate_specification_health_report", "Generate a comprehensive health report for all specifications in a project, including progress, completeness, velocity, and recommendations", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to generate health report for"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
 
             // Graph memory tools (Phase 5/6)
-            Tool {
-                name: "index_project".into(),
-                description: Some("Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports/calls/inherits/references edges), and best-effort embed symbol text for semantic search. Incremental: unchanged files are skipped (content-hash check), deleted files are pruned, and only changed files are re-parsed/re-embedded, so repeated calls are cheap. The result reports files_indexed (changed files re-indexed this run), files_skipped (unchanged files skipped), files_removed (previously-indexed files no longer on disk), plus symbols/edges indexed and embedding counts".into()),
-                input_schema: Arc::new(serde_json::json!({
+            Tool::new("index_project", "Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports/calls/inherits/references edges), and best-effort embed symbol text for semantic search. Incremental: unchanged files are skipped (content-hash check), deleted files are pruned, and only changed files are re-parsed/re-embedded, so repeated calls are cheap. The result reports files_indexed (changed files re-indexed this run), files_skipped (unchanged files skipped), files_removed (previously-indexed files no longer on disk), plus symbols/edges indexed and embedding counts", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to index"},
@@ -504,13 +353,8 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
                     },
                     "required": ["project_id", "root_path"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "search_symbols".into(),
-                description: Some("Search the indexed symbol graph by name (case-insensitive substring)".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("search_symbols", "Search the indexed symbol graph by name (case-insensitive substring)", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -518,13 +362,8 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "limit": {"type": "integer", "description": "Maximum number of results", "default": 20}
                     },
                     "required": ["project_id", "query"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "traverse_graph".into(),
-                description: Some("Budgeted breadth-first traversal of the symbol graph from a start symbol".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("traverse_graph", "Budgeted breadth-first traversal of the symbol graph from a start symbol", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -534,13 +373,8 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
                     },
                     "required": ["project_id", "start_symbol_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "semantic_search".into(),
-                description: Some("Semantic (cosine-similarity) search over embedded context for a project".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("semantic_search", "Semantic (cosine-similarity) search over embedded context for a project", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -548,39 +382,24 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "limit": {"type": "integer", "description": "Maximum number of results", "default": 10}
                     },
                     "required": ["project_id", "query"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "get_file_outline".into(),
-                description: Some("Return a token-efficient structural outline of one indexed file: every symbol's kind, name, signature and line range, with bodies omitted. Use this to understand a file's shape cheaply, then fetch only the symbol you need with get_symbol_source.".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("get_file_outline", "Return a token-efficient structural outline of one indexed file: every symbol's kind, name, signature and line range, with bodies omitted. Use this to understand a file's shape cheaply, then fetch only the symbol you need with get_symbol_source.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
                         "file_path": {"type": "string", "description": "File path exactly as recorded during indexing"}
                     },
                     "required": ["project_id", "file_path"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "get_symbol_source".into(),
-                description: Some("Return the exact source of a single symbol, sliced from its file by the symbol's line range. Pass an id from get_file_outline or search_symbols. This reads one function/method instead of a whole file, which is the main way to keep context small.".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("get_symbol_source", "Return the exact source of a single symbol, sliced from its file by the symbol's line range. Pass an id from get_file_outline or search_symbols. This reads one function/method instead of a whole file, which is the main way to keep context small.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
                         "symbol_id": {"type": "string", "description": "The symbol node ID to read the source of"}
                     },
                     "required": ["project_id", "symbol_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "get_symbol_context".into(),
-                description: Some("Assemble a budgeted context bundle for one symbol: its source plus the symbols that use it (callers, usages, implementors) and that it uses (callees, supertypes). The token-efficient way to see how a symbol fits into a codebase without reading whole files. Pass an id from get_file_outline or search_symbols.".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("get_symbol_context", "Assemble a budgeted context bundle for one symbol: its source plus the symbols that use it (callers, usages, implementors) and that it uses (callees, supertypes). The token-efficient way to see how a symbol fits into a codebase without reading whole files. Pass an id from get_file_outline or search_symbols.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -589,57 +408,51 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "session_id": {"type": "string", "description": "Session id for the conversation delta log", "default": "default"}
                     },
                     "required": ["project_id", "symbol_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "list_indexed_files".into(),
-                description: Some("List every file currently in a project's index, with its detected language and parsed-symbol count, ordered by path. Use this to review what indexing actually picked up (or to spot files that were skipped) before running get_file_outline or get_symbol_context.".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("list_indexed_files", "List every file currently in a project's index, with its detected language and parsed-symbol count, ordered by path. Use this to review what indexing actually picked up (or to spot files that were skipped) before running get_file_outline or get_symbol_context.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "get_graph_stats".into(),
-                description: Some("Report symbol and edge counts for a project's indexed graph".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("get_graph_stats", "Report symbol and edge counts for a project's indexed graph", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"}
                     },
                     "required": ["project_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
-            Tool {
-                name: "get_conversation_deltas".into(),
-                description: Some("Retrieve the conversation-memory delta log for a session (index/traverse/search events), newest first".into()),
-                input_schema: Arc::new(serde_json::json!({
+                }).as_object().unwrap().clone())),
+            Tool::new("get_conversation_deltas", "Retrieve the conversation-memory delta log for a session (index/traverse/search events), newest first", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "session_id": {"type": "string", "description": "The conversation session ID"},
                         "limit": {"type": "integer", "description": "Maximum number of deltas to return", "default": 20}
                     },
                     "required": ["session_id"]
-                }).as_object().unwrap().clone()),
-                annotations: None,
-            },
+                }).as_object().unwrap().clone())),
         ];
 
         Ok(ListToolsResult {
             tools,
             next_cursor: None,
+            ..Default::default()
         })
     }
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        Ok(self.call_tool_impl(request, _context).await?.into())
+    }
+}
+
+impl EnhancedContextMcpServer {
+    async fn call_tool_impl(
+        &self,
+        request: CallToolRequestParams,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         tracing::debug!("Received call_tool request: {}", request.name);
@@ -651,7 +464,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&projects).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Context Query
@@ -763,7 +576,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&payload).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => {
                         // Track failed query
@@ -833,7 +646,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&violations).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => {
                         // Track failed validation
@@ -1373,7 +1186,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&capabilities).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Business Rules CRUD operations are now handled by universal CRUD handlers
@@ -1479,7 +1292,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&components).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Cache and Cleanup Operations
@@ -1503,7 +1316,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "clear_all_cache" => {
                 // This would be a nuclear option - clear everything
@@ -1515,7 +1328,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Get entity by ID operations
@@ -1579,7 +1392,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Universal CRUD Operations - Remove duplicate handlers
@@ -1648,7 +1461,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "cache_management" => {
                 let args = request.arguments.unwrap_or_default();
@@ -1687,7 +1500,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Analytics MCP Tools
@@ -1774,7 +1587,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&result).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => {
                         // Track failed analytics query
@@ -1843,7 +1656,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&insights).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => {
                         // Track failed insights query
@@ -1956,7 +1769,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&report).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => {
                         // Track failed report generation
@@ -2088,7 +1901,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                             serde_json::to_string_pretty(&final_content).map_err(|e| {
                                 McpError::internal_error(format!("Serialization error: {e}"), None)
                             })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => {
                         // Track failed export
@@ -2359,7 +2172,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             "update_entity" => {
@@ -2549,7 +2362,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             "delete_entity" => {
@@ -2613,7 +2426,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Removed duplicate get_entity handler
@@ -2726,7 +2539,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Cache Management
@@ -2816,7 +2629,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&results).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             "bulk_delete_components" => {
@@ -2862,7 +2675,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&result).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             "bulk_operations" => {
@@ -2940,7 +2753,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&results).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {}", e), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     ("update", "framework_component") => {
                         let mut results = Vec::new();
@@ -2993,7 +2806,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&results).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {}", e), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     ("delete", "framework_component") => {
                         let mut ids = Vec::new();
@@ -3028,7 +2841,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&result).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {}", e), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     _ => Err(McpError::invalid_params(
                         format!(
@@ -3062,7 +2875,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&specs).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => Err(McpError::internal_error(
                         format!("Failed to scan specifications: {e}"),
@@ -3091,7 +2904,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&spec).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => Err(McpError::internal_error(
                         format!("Failed to import specification: {e}"),
@@ -3125,7 +2938,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&result).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => Err(McpError::internal_error(
                         format!("Failed to validate specification: {e}"),
@@ -3157,7 +2970,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&result).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => Err(McpError::internal_error(
                         format!("Failed to start monitoring: {e}"),
@@ -3185,7 +2998,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&versions).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => Err(McpError::internal_error(
                         format!("Failed to get specification versions: {e}"),
@@ -3219,7 +3032,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&comparison).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
                     Err(e) => Err(McpError::internal_error(
                         format!("Failed to compare specification versions: {e}"),
@@ -3279,7 +3092,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&report).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "search_symbols" => {
                 let args = request.arguments.unwrap_or_default();
@@ -3302,7 +3115,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&symbols).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "traverse_graph" => {
                 let args = request.arguments.unwrap_or_default();
@@ -3337,7 +3150,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&subgraph).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "semantic_search" => {
                 let args = request.arguments.unwrap_or_default();
@@ -3360,7 +3173,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&results).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "get_file_outline" => {
                 let args = request.arguments.unwrap_or_default();
@@ -3385,7 +3198,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&outline).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "get_symbol_source" => {
                 let args = request.arguments.unwrap_or_default();
@@ -3412,9 +3225,9 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&source).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
-                    None => Ok(CallToolResult::success(vec![Content::text(format!(
+                    None => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "No symbol found with id '{symbol_id}' in project '{project_id}'"
                     ))])),
                 }
@@ -3449,9 +3262,9 @@ impl ServerHandler for EnhancedContextMcpServer {
                         let content = serde_json::to_string_pretty(&context).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
-                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                        Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
                     }
-                    None => Ok(CallToolResult::success(vec![Content::text(format!(
+                    None => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "No symbol found with id '{symbol_id}' in project '{project_id}'"
                     ))])),
                 }
@@ -3473,7 +3286,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&files).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "get_graph_stats" => {
                 let args = request.arguments.unwrap_or_default();
@@ -3492,7 +3305,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&stats).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
             "get_conversation_deltas" => {
                 let args = request.arguments.unwrap_or_default();
@@ -3512,7 +3325,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let content = serde_json::to_string_pretty(&deltas).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(content)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
             }
 
             // Fallback for undefined tools
