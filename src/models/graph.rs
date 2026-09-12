@@ -158,6 +158,15 @@ pub struct SymbolSource {
     pub source: String,
 }
 
+/// A file currently present in a project's index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexedFile {
+    pub file_path: String,
+    pub language: String,
+    /// Symbols parsed from this file (the file/package/import nodes excluded).
+    pub symbol_count: usize,
+}
+
 /// One edge of a [`SymbolContext`]: the neighbour on the other end, plus the
 /// relationship and its direction.
 #[derive(Debug, Clone, Serialize, Deserialize)]

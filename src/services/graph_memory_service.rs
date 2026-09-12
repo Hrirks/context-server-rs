@@ -16,7 +16,7 @@ use rmcp::model::ErrorData as McpError;
 use crate::models::embedding::content_hash;
 use crate::models::graph::{
     ConversationMemory, EdgeType, GraphEdge, GraphStats, GraphSubgraph, GraphSymbol, IndexReport,
-    RelatedSymbol, SymbolContext, SymbolOutline, SymbolSource,
+    IndexedFile, RelatedSymbol, SymbolContext, SymbolOutline, SymbolSource,
 };
 use crate::parser::{
     chunk_file_async, discover_sources, ChunkKind, ReferenceKind, SemanticChunk, SourceLanguage,
@@ -439,6 +439,14 @@ impl GraphMemoryService {
             callees,
             truncated,
         }))
+    }
+
+    /// Every file currently in a project's index, with its symbol count.
+    ///
+    /// The human-review surface for an index: answers "what did indexing
+    /// actually pick up?" without walking the symbol graph.
+    pub async fn indexed_files(&self, project_id: &str) -> Result<Vec<IndexedFile>, McpError> {
+        self.repository.list_indexed_files(project_id).await
     }
 
     /// Token-efficient structural outline of one indexed file.
@@ -903,6 +911,36 @@ mod tests {
             report.embedded
         );
         assert_eq!(report.embed_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn indexed_files_lists_parsed_files_with_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc outer() {\n\tinner()\n}\n\nfunc inner() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let files = service.indexed_files("p1").await.unwrap();
+        assert_eq!(files.len(), 1, "expected one indexed file: {files:?}");
+        assert!(files[0].file_path.ends_with("main.go"));
+        assert_eq!(files[0].language, "go");
+        // `outer` and `inner`; the file/package nodes are excluded.
+        assert_eq!(files[0].symbol_count, 2);
+
+        // A project with nothing indexed reviews as empty, not as an error.
+        assert!(service
+            .indexed_files("no-such-project")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

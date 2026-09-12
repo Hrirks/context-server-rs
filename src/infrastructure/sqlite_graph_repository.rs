@@ -285,6 +285,39 @@ impl GraphRepository for SqliteGraphRepository {
         Ok(edges)
     }
 
+    async fn list_indexed_files(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::models::graph::IndexedFile>, McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        let mut stmt = db
+            .prepare(
+                "SELECT file_path, MAX(language), COUNT(*) \
+                 FROM context_symbols \
+                 WHERE project_id = ?1 AND kind NOT IN ('file', 'package', 'import') \
+                 GROUP BY file_path ORDER BY file_path",
+            )
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to prepare file query: {e}"), None)
+            })?;
+
+        let files = stmt
+            .query_map(params![project_id], |row| {
+                Ok(crate::models::graph::IndexedFile {
+                    file_path: row.get(0)?,
+                    language: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    symbol_count: row.get::<_, i64>(2)? as usize,
+                })
+            })
+            .map_err(|e| McpError::internal_error(format!("Failed to query files: {e}"), None))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| McpError::internal_error(format!("Failed to read files: {e}"), None))?;
+
+        Ok(files)
+    }
+
     async fn delete_project(&self, project_id: &str) -> Result<(), McpError> {
         let conn = self.checkout()?;
         let db = conn.lock().unwrap();

@@ -28,6 +28,12 @@ pub trait GraphRepository: Send + Sync {
     /// All edges arriving at a symbol (its callers/usages/references).
     async fn find_incoming_edges(&self, symbol_id: &str) -> Result<Vec<GraphEdge>, McpError>;
 
+    /// Every file in a project's index, with its parsed-symbol count.
+    async fn list_indexed_files(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::models::graph::IndexedFile>, McpError>;
+
     /// Remove a project's symbols and edges (used before a full re-index).
     #[allow(dead_code)]
     async fn delete_project(&self, project_id: &str) -> Result<(), McpError>;

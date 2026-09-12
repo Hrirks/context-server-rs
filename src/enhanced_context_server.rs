@@ -579,6 +579,18 @@ impl ServerHandler for EnhancedContextMcpServer {
                 annotations: None,
             },
             Tool {
+                name: "list_indexed_files".into(),
+                description: Some("List every file currently in a project's index, with its detected language and parsed-symbol count, ordered by path. Use this to review what indexing actually picked up (or to spot files that were skipped) before running get_file_outline or get_symbol_context.".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"}
+                    },
+                    "required": ["project_id"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
                 name: "get_graph_stats".into(),
                 description: Some("Report symbol and edge counts for a project's indexed graph".into()),
                 input_schema: Arc::new(serde_json::json!({
@@ -1210,6 +1222,15 @@ impl ServerHandler for EnhancedContextMcpServer {
                                 "project_id".to_string(),
                             ],
                             example_use: "Check how much of a project has been indexed".to_string(),
+                        },
+                        ToolInfo {
+                            name: "list_indexed_files".to_string(),
+                            description: "List indexed files with language and symbol counts".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                            ],
+                            example_use: "Review what indexing picked up before querying symbols".to_string(),
                         },
                         ToolInfo {
                             name: "get_conversation_deltas".to_string(),
@@ -3371,6 +3392,25 @@ impl ServerHandler for EnhancedContextMcpServer {
                         "No symbol found with id '{symbol_id}' in project '{project_id}'"
                     ))])),
                 }
+            }
+            "list_indexed_files" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+
+                let files = self
+                    .container
+                    .graph_memory_service
+                    .indexed_files(project_id)
+                    .await?;
+                let content = serde_json::to_string_pretty(&files).map_err(|e| {
+                    McpError::internal_error(format!("Serialization error: {e}"), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(content)]))
             }
             "get_graph_stats" => {
                 let args = request.arguments.unwrap_or_default();
