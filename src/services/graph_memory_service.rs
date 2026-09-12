@@ -16,6 +16,7 @@ use rmcp::model::ErrorData as McpError;
 use crate::models::embedding::content_hash;
 use crate::models::graph::{
     ConversationMemory, EdgeType, GraphEdge, GraphStats, GraphSubgraph, GraphSymbol, IndexReport,
+    SymbolOutline, SymbolSource,
 };
 use crate::parser::{
     chunk_file_async, discover_sources, ChunkKind, ReferenceKind, SemanticChunk, SourceLanguage,
@@ -340,6 +341,66 @@ impl GraphMemoryService {
         })
     }
 
+    /// Token-efficient structural outline of one indexed file.
+    ///
+    /// Returns every symbol in `file_path` (excluding the synthetic `file` node)
+    /// with its kind, signature, and line range but *not* its body, ordered by
+    /// position. This lets an agent see a file's shape for a few dozen tokens
+    /// instead of reading the whole file.
+    pub async fn file_outline(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<SymbolOutline>, McpError> {
+        let symbols = self
+            .repository
+            .list_symbols_for_file(project_id, file_path)
+            .await?;
+
+        let outlines = symbols
+            .iter()
+            .filter(|symbol| symbol.kind != "file")
+            .map(SymbolOutline::from)
+            .collect();
+
+        Ok(outlines)
+    }
+
+    /// Exact source for a single symbol, sliced from its file by line range.
+    ///
+    /// Line ranges are 1-based and inclusive. When the file can no longer be
+    /// read (moved, deleted, permissions) this falls back to the symbol text
+    /// captured at index time.
+    pub async fn symbol_source(
+        &self,
+        project_id: &str,
+        symbol_id: &str,
+    ) -> Result<Option<SymbolSource>, McpError> {
+        let Some(symbol) = self.repository.find_symbol(symbol_id).await? else {
+            return Ok(None);
+        };
+        if symbol.project_id != project_id {
+            return Ok(None);
+        }
+
+        let source = match tokio::fs::read_to_string(&symbol.file_path).await {
+            Ok(content) => slice_lines(&content, symbol.start_line, symbol.end_line),
+            Err(_) => symbol.text.clone(),
+        };
+
+        Ok(Some(SymbolSource {
+            id: symbol.id,
+            name: symbol.name,
+            kind: symbol.kind,
+            file_path: symbol.file_path,
+            language: symbol.language,
+            signature: symbol.signature,
+            start_line: symbol.start_line,
+            end_line: symbol.end_line,
+            source,
+        }))
+    }
+
     /// Case-insensitive substring search over symbol names.
     pub async fn search_symbols(
         &self,
@@ -518,6 +579,22 @@ fn indexable_kind(kind: ChunkKind) -> bool {
 /// edge. Mirrors [`indexable_kind`] for the string kinds persisted in the graph.
 fn kind_indexable(kind: &str) -> bool {
     !matches!(kind, "file" | "package" | "import")
+}
+
+/// Slice 1-based inclusive line range `start..=end` out of `source`.
+///
+/// `start == 0` (or an otherwise unusable range) yields the whole source, which
+/// keeps the caller from returning an empty body for unset line numbers.
+fn slice_lines(source: &str, start_line: usize, end_line: usize) -> String {
+    if start_line == 0 || end_line < start_line {
+        return source.to_string();
+    }
+    source
+        .lines()
+        .skip(start_line - 1)
+        .take(end_line - start_line + 1)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The display name for a chunk; derived from the parse when the grammar did
@@ -775,5 +852,93 @@ mod tests {
 
         let stats = service.stats("p1").await.unwrap();
         assert_eq!(stats.symbol_count, 3); // file + package + function (aChanged)
+    }
+
+    #[tokio::test]
+    async fn file_outline_lists_symbols_without_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "svc.go",
+            "package main\n\nfunc alpha() {\n\tprintln(\"a\")\n}\n\nfunc beta() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let file_path = dir.path().join("svc.go").display().to_string();
+        let outline = service.file_outline("p1", &file_path).await.unwrap();
+
+        let names: Vec<&str> = outline.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"beta"));
+        // The synthetic `file` node is excluded from outlines.
+        assert!(!names.iter().any(|n| *n == file_path));
+        // Ordered by position.
+        let alpha = outline.iter().find(|s| s.name == "alpha").unwrap();
+        let beta = outline.iter().find(|s| s.name == "beta").unwrap();
+        assert!(alpha.start_line < beta.start_line);
+    }
+
+    #[tokio::test]
+    async fn symbol_source_slices_exact_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "svc.go",
+            "package main\n\nfunc alpha() {\n\tprintln(\"a\")\n}\n\nfunc beta() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let symbol = service
+            .search_symbols("p1", "alpha", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let source = service
+            .symbol_source("p1", &symbol.id)
+            .await
+            .unwrap()
+            .expect("symbol should exist");
+        assert_eq!(source.name, "alpha");
+        assert!(source.source.contains("println(\"a\")"));
+        assert!(!source.source.contains("func beta"));
+    }
+
+    #[tokio::test]
+    async fn symbol_source_is_scoped_to_project() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(dir.path(), "svc.go", "package main\n\nfunc alpha() {}\n");
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let symbol = service
+            .search_symbols("p1", "alpha", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        assert!(service
+            .symbol_source("other-project", &symbol.id)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

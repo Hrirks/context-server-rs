@@ -305,6 +305,36 @@ impl GraphRepository for SqliteGraphRepository {
         Ok(symbols)
     }
 
+    async fn list_symbols_for_file(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<GraphSymbol>, McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        let query = format!(
+            "SELECT {SYMBOL_COLUMNS} FROM context_symbols \
+             WHERE project_id = ?1 AND file_path = ?2 \
+             ORDER BY start_line ASC, end_line DESC"
+        );
+        let mut stmt = db.prepare(&query).map_err(|e| {
+            McpError::internal_error(format!("Failed to prepare file symbol list: {e}"), None)
+        })?;
+
+        let symbols = stmt
+            .query_map(params![project_id, file_path], row_to_symbol)
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to list file symbols: {e}"), None)
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to read file symbols: {e}"), None)
+            })?;
+
+        Ok(symbols)
+    }
+
     async fn delete_symbols_for_file(
         &self,
         project_id: &str,

@@ -250,8 +250,38 @@ Search the indexed symbol graph by name (case-insensitive substring).
 ### `traverse_graph`
 Budgeted breadth-first traversal of the symbol graph from a start symbol.
 
+### `get_file_outline`
+Return a token-efficient structural outline of one indexed file: every symbol's
+kind, name, signature, and line range, with bodies omitted.
+
+**Parameters:**
+```json
+{ "project_id": "your-project-id", "file_path": "/path/to/Svc.java" }
+```
+
+Use this to understand a file's shape for a few dozen tokens before reading any
+source.
+
+### `get_symbol_source`
+Return the exact source of a single symbol, sliced from its file by the symbol's
+line range. Pass an `id` obtained from `get_file_outline` or `search_symbols`.
+
+**Parameters:**
+```json
+{ "project_id": "your-project-id", "symbol_id": "the-symbol-node-id" }
+```
+
+This reads one function/method instead of an entire file — the primary way to
+keep an agent's context small.
+
 ### `semantic_search`
 Semantic (cosine-similarity) search over embedded context for a project.
+
+Ranking runs inside SQLite via the [sqlite-vec](https://github.com/asg017/sqlite-vec)
+extension (`vec_distance_cosine`), so stored vectors are never materialized as
+Rust structs. If the extension is unavailable, or a project's vectors are not
+dimensionally consistent, the service transparently falls back to a brute-force
+cosine scan.
 
 ## 4. Using with Claude Desktop or VS Code
 

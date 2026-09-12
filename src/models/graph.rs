@@ -115,6 +115,49 @@ pub struct IndexReport {
     pub embed_failures: usize,
 }
 
+/// A compact, body-free view of a single symbol.
+///
+/// This is the token-efficient projection used by file outlines: it carries the
+/// structural facts an agent needs to navigate (name, kind, signature, line
+/// range) without the symbol body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolOutline {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub signature: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+impl From<&GraphSymbol> for SymbolOutline {
+    fn from(symbol: &GraphSymbol) -> Self {
+        Self {
+            id: symbol.id.clone(),
+            name: symbol.name.clone(),
+            kind: symbol.kind.clone(),
+            signature: symbol.signature.clone(),
+            start_line: symbol.start_line,
+            end_line: symbol.end_line,
+        }
+    }
+}
+
+/// A single symbol together with the exact source lines it spans.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolSource {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub file_path: String,
+    pub language: String,
+    pub signature: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    /// The symbol's source, sliced from its file by line range.
+    pub source: String,
+}
+
 /// A record in the conversation-memory delta log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMemory {

@@ -32,6 +32,13 @@ pub trait GraphRepository: Send + Sync {
     /// Load every symbol for a project.
     async fn list_symbols(&self, project_id: &str) -> Result<Vec<GraphSymbol>, McpError>;
 
+    /// Load every symbol belonging to `file_path` in a project.
+    async fn list_symbols_for_file(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<GraphSymbol>, McpError>;
+
     /// Remove every symbol belonging to `file_path` and all edges touching them,
     /// returning the removed symbol ids so callers can also delete embeddings.
     async fn delete_symbols_for_file(

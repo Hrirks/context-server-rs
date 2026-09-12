@@ -538,6 +538,32 @@ impl ServerHandler for EnhancedContextMcpServer {
                 annotations: None,
             },
             Tool {
+                name: "get_file_outline".into(),
+                description: Some("Return a token-efficient structural outline of one indexed file: every symbol's kind, name, signature and line range, with bodies omitted. Use this to understand a file's shape cheaply, then fetch only the symbol you need with get_symbol_source.".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"},
+                        "file_path": {"type": "string", "description": "File path exactly as recorded during indexing"}
+                    },
+                    "required": ["project_id", "file_path"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
+                name: "get_symbol_source".into(),
+                description: Some("Return the exact source of a single symbol, sliced from its file by the symbol's line range. Pass an id from get_file_outline or search_symbols. This reads one function/method instead of a whole file, which is the main way to keep context small.".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"},
+                        "symbol_id": {"type": "string", "description": "The symbol node ID to read the source of"}
+                    },
+                    "required": ["project_id", "symbol_id"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
                 name: "get_graph_stats".into(),
                 description: Some("Report symbol and edge counts for a project's indexed graph".into()),
                 input_schema: Arc::new(serde_json::json!({
@@ -3146,6 +3172,63 @@ impl ServerHandler for EnhancedContextMcpServer {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
                 })?;
                 Ok(CallToolResult::success(vec![Content::text(content)]))
+            }
+            "get_file_outline" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+                let file_path =
+                    args.get("file_path")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: file_path", None)
+                        })?;
+
+                let outline = self
+                    .container
+                    .graph_memory_service
+                    .file_outline(project_id, file_path)
+                    .await?;
+                let content = serde_json::to_string_pretty(&outline).map_err(|e| {
+                    McpError::internal_error(format!("Serialization error: {e}"), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(content)]))
+            }
+            "get_symbol_source" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+                let symbol_id =
+                    args.get("symbol_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: symbol_id", None)
+                        })?;
+
+                match self
+                    .container
+                    .graph_memory_service
+                    .symbol_source(project_id, symbol_id)
+                    .await?
+                {
+                    Some(source) => {
+                        let content = serde_json::to_string_pretty(&source).map_err(|e| {
+                            McpError::internal_error(format!("Serialization error: {e}"), None)
+                        })?;
+                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                    }
+                    None => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No symbol found with id '{symbol_id}' in project '{project_id}'"
+                    ))])),
+                }
             }
             "get_graph_stats" => {
                 let args = request.arguments.unwrap_or_default();
