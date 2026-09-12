@@ -187,6 +187,72 @@ Create and track development phases for project management.
 ### `list_development_phases`
 List all development phases for a project in order.
 
+### Graph Memory Tools
+
+### `index_project`
+Index a codebase directory into graph memory: parse sources, build a symbol
+graph (contains/imports/calls/inherits/references edges), and best-effort embed
+symbol text for semantic search.
+
+**Parameters:**
+```json
+{
+  "project_id": "your-project-id",
+  "root_path": "/path/to/your/source/tree",
+  "session_id": "optional-session-id"
+}
+```
+
+Indexing is **incremental**. Each file's content hash is stored with its file
+symbol, so on subsequent runs:
+
+- **Unchanged files are skipped** — they are not re-parsed or re-embedded.
+- **Deleted files are pruned** — their symbols, edges, and embeddings are removed.
+- **Changed files are re-indexed** — only they are re-parsed and re-embedded.
+
+This makes repeated `index_project` calls cheap, so agents can safely re-index a
+large tree to pick up local edits without paying a full re-parse each time.
+
+**Returns** an `IndexReport` with the following counters:
+
+| Field | Meaning |
+| --- | --- |
+| `project_id` | The project that was indexed |
+| `files_indexed` | Files that changed and were re-indexed this run |
+| `files_skipped` | Files that were unchanged and skipped |
+| `files_removed` | Previously-indexed files no longer present on disk |
+| `symbols_indexed` | Symbols parsed/updated this run |
+| `edges_indexed` | Graph edges created/updated this run |
+| `embedded` | Symbols whose text was successfully embedded |
+| `embed_failures` | Symbols whose embedding failed (e.g. Ollama unreachable) |
+
+```json
+{
+  "project_id": "flutter-shop-app",
+  "files_indexed": 3,
+  "files_skipped": 1527,
+  "files_removed": 1,
+  "symbols_indexed": 214,
+  "edges_indexed": 861,
+  "embedded": 214,
+  "embed_failures": 0
+}
+```
+
+> Note: a changed file drops its incoming edges from *unchanged* source files
+> until those sources themselves change. This is a deliberate trade-off of the
+> incremental design; a full re-index (delete and re-create the project) rebuilds
+> the complete graph.
+
+### `search_symbols`
+Search the indexed symbol graph by name (case-insensitive substring).
+
+### `traverse_graph`
+Budgeted breadth-first traversal of the symbol graph from a start symbol.
+
+### `semantic_search`
+Semantic (cosine-similarity) search over embedded context for a project.
+
 ## 4. Using with Claude Desktop or VS Code
 
 Once configured, you can ask Claude or your MCP-enabled IDE to:

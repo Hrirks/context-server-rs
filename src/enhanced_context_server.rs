@@ -481,7 +481,7 @@ impl ServerHandler for EnhancedContextMcpServer {
             // Graph memory tools (Phase 5/6)
             Tool {
                 name: "index_project".into(),
-                description: Some("Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports/calls/inherits/references edges), and best-effort embed symbol text for semantic search".into()),
+                description: Some("Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports/calls/inherits/references edges), and best-effort embed symbol text for semantic search. Incremental: unchanged files are skipped (content-hash check), deleted files are pruned, and only changed files are re-parsed/re-embedded, so repeated calls are cheap. The result reports files_indexed (changed files re-indexed this run), files_skipped (unchanged files skipped), files_removed (previously-indexed files no longer on disk), plus symbols/edges indexed and embedding counts".into()),
                 input_schema: Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
