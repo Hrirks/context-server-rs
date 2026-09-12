@@ -16,6 +16,11 @@ pub const BUSY_TIMEOUT_MS: u64 = 5_000;
 
 /// Open a SQLite connection with the production pragma set already applied.
 pub fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
+    // Register the sqlite-vec auto-extension first: it only applies to
+    // connections opened afterwards, and every connection the server opens
+    // goes through this function.
+    crate::db::sqlite_vec::register();
+
     let conn = Connection::open(path)?;
     configure(&conn)?;
     Ok(conn)

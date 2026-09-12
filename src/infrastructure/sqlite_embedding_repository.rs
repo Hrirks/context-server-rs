@@ -1,5 +1,5 @@
 use crate::db::connection_pool::{ConnectionPool, PooledConnection};
-use crate::models::embedding::StoredEmbedding;
+use crate::models::embedding::{EmbeddingSearchResult, StoredEmbedding};
 use crate::repositories::EmbeddingRepository;
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
@@ -238,6 +238,54 @@ impl EmbeddingRepository for SqliteEmbeddingRepository {
         Ok(embeddings)
     }
 
+    async fn search_similar_vectors(
+        &self,
+        project_id: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<EmbeddingSearchResult>, McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        // `vec_distance_cosine` returns 1 - cosine_similarity, so the similarity
+        // is `1 - distance`. Vectors are submitted as JSON (the format the column
+        // already stores) and the ranking runs entirely inside SQLite.
+        let query_json = serde_json::to_string(query_vector).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize query vector: {e}"), None)
+        })?;
+
+        let mut stmt = db
+            .prepare(
+                "SELECT context_id, content_type, \
+                 1.0 - vec_distance_cosine(?1, embedding_vector) AS similarity \
+                 FROM context_embeddings \
+                 WHERE project_id = ?2 \
+                 ORDER BY similarity DESC \
+                 LIMIT ?3",
+            )
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to prepare vector search: {e}"), None)
+            })?;
+
+        let rows = stmt
+            .query_map(params![query_json, project_id, limit as i64], |row| {
+                Ok(EmbeddingSearchResult {
+                    context_id: row.get(0)?,
+                    similarity: row.get(2)?,
+                    content_type: row.get(1)?,
+                })
+            })
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to run vector search: {e}"), None)
+            })?;
+
+        let results = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| McpError::internal_error(format!("Failed to read results: {e}"), None))?;
+
+        Ok(results)
+    }
+
     async fn count(&self) -> Result<u64, McpError> {
         let conn = self.checkout()?;
         let db = conn.lock().unwrap();
@@ -368,5 +416,51 @@ mod tests {
         let p1 = repo.find_embeddings_by_project("p1").await.unwrap();
         assert_eq!(p1.len(), 1);
         assert_eq!(p1[0].context_id, "ctx-1");
+    }
+
+    #[tokio::test]
+    async fn sqlite_vec_search_ranks_by_cosine_similarity() {
+        let repo = SqliteEmbeddingRepository::new(test_pool());
+        repo.initialize_tables().unwrap();
+
+        let mut aligned = sample_embedding("aligned");
+        aligned.vector = vec![1.0, 0.0, 0.0];
+        let mut tilted = sample_embedding("tilted");
+        tilted.vector = vec![0.7, 0.7, 0.0];
+        let mut orthogonal = sample_embedding("orthogonal");
+        orthogonal.vector = vec![0.0, 1.0, 0.0];
+
+        for e in [&aligned, &tilted, &orthogonal] {
+            repo.upsert_embedding(e).await.unwrap();
+        }
+
+        let results = repo
+            .search_similar_vectors("p1", &[1.0, 0.0, 0.0], 3)
+            .await
+            .expect("sqlite-vec search should be available");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].context_id, "aligned");
+        assert!((results[0].similarity - 1.0).abs() < 1e-5);
+        assert_eq!(results[2].context_id, "orthogonal");
+        assert!(results[2].similarity.abs() < 1e-5);
+    }
+
+    #[tokio::test]
+    async fn sqlite_vec_search_respects_limit() {
+        let repo = SqliteEmbeddingRepository::new(test_pool());
+        repo.initialize_tables().unwrap();
+
+        for i in 0..5 {
+            let mut e = sample_embedding(&format!("c{i}"));
+            e.vector = vec![1.0, i as f32 * 0.1, 0.0];
+            repo.upsert_embedding(&e).await.unwrap();
+        }
+
+        let results = repo
+            .search_similar_vectors("p1", &[1.0, 0.0, 0.0], 2)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
     }
 }

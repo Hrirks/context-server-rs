@@ -3,7 +3,9 @@
 //! This is distinct from [`crate::embedding::EmbeddingService`], which only
 //! *computes* vectors. [`EmbeddingStoreService`] combines a compute backend with
 //! an [`EmbeddingRepository`] so callers can embed text, persist the result, and
-//! run brute-force cosine search over stored vectors — all behind one seam.
+//! run cosine search over stored vectors — all behind one seam. Search prefers
+//! ranking inside SQLite (sqlite-vec) and only falls back to a brute-force Rust
+//! scan when that is unavailable.
 
 use crate::embedding::EmbeddingService as EmbeddingBackend;
 use crate::models::embedding::{
@@ -86,10 +88,12 @@ impl EmbeddingStoreService {
         Ok(embedding)
     }
 
-    /// Brute-force cosine search over a project's stored embeddings.
+    /// Cosine-similarity search over a project's stored embeddings.
     ///
-    /// At the ~50k-vector scale this engine targets, a full linear scan is a
-    /// few milliseconds, so no approximate vector index is needed yet.
+    /// Ranking prefers sqlite-vec, which does the distance math inside SQLite
+    /// without materializing every vector as a Rust struct. If the extension is
+    /// unavailable (or the stored vectors are not mutually dimensionally
+    /// consistent), it transparently falls back to a brute-force scan.
     pub async fn search(
         &self,
         query: &str,
@@ -100,6 +104,29 @@ impl EmbeddingStoreService {
             McpError::internal_error(format!("Embedding backend failed: {e}"), None)
         })?;
 
+        match self
+            .repository
+            .search_similar_vectors(project_id, &query_vector, limit)
+            .await
+        {
+            Ok(results) => Ok(results),
+            Err(error) => {
+                tracing::debug!(
+                    "sqlite-vec search unavailable ({error}); falling back to brute-force scan"
+                );
+                self.search_brute_force(project_id, &query_vector, limit)
+                    .await
+            }
+        }
+    }
+
+    /// Linear cosine scan over a project's embeddings (the pre-sqlite-vec path).
+    async fn search_brute_force(
+        &self,
+        project_id: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<EmbeddingSearchResult>, McpError> {
         let embeddings = self
             .repository
             .find_embeddings_by_project(project_id)
@@ -108,7 +135,7 @@ impl EmbeddingStoreService {
         let mut scored: Vec<EmbeddingSearchResult> = embeddings
             .into_iter()
             .map(|e| EmbeddingSearchResult {
-                similarity: cosine_similarity(&query_vector, &e.vector),
+                similarity: cosine_similarity(query_vector, &e.vector),
                 context_id: e.context_id,
                 content_type: e.content_type,
             })

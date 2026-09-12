@@ -45,6 +45,9 @@ tree-sitter = "0.27"
 tree-sitter-java = "0.23"
 tree-sitter-go = "0.25"
 tree-sitter-dart = "0.2"
+# SQL-side vector distance functions (vec_distance_cosine) registered as a
+# process-global SQLite auto-extension; see src/db/sqlite_vec.rs.
+sqlite-vec = "0.1.9"
 
 [dev-dependencies]
 tokio-test = "0.4"
