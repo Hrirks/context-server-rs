@@ -109,6 +109,9 @@ pub struct IndexReport {
     pub files_removed: usize,
     pub symbols_indexed: usize,
     pub edges_indexed: usize,
+    /// Edges restored after a re-index: links from files that were not
+    /// re-parsed, pointing at declarations that still exist.
+    pub edges_reconnected: usize,
     /// Number of symbols whose text was embedded for semantic search.
     pub embedded: usize,
     /// Number of symbols that failed to embed (backend down, empty text, etc.).

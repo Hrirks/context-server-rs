@@ -85,9 +85,9 @@ impl GraphMemoryService {
     /// project symbol set. Embedding is best-effort: an unavailable backend
     /// degrades to a graph-only index rather than failing the whole run.
     ///
-    /// Note: when a file changes, edges that point *into* it from unchanged files
-    /// are dropped (those source files are not re-parsed) and restored the next
-    /// time those source files change.
+    /// Edges pointing *into* a re-indexed file from files that were not
+    /// re-parsed are carried across the rewrite and restored when the
+    /// declaration they targeted still exists (see [`IndexReport::edges_reconnected`]).
     pub async fn index_directory(
         &self,
         project_id: &str,
@@ -152,6 +152,26 @@ impl GraphMemoryService {
             }
         }
 
+        // Symbols of the files about to be re-parsed, so the edges pointing at
+        // them can be carried across the rewrite.
+        let mut previous_symbols: HashMap<&str, Vec<&GraphSymbol>> = HashMap::new();
+        for symbol in &existing {
+            if kind_indexable(&symbol.kind) && !unchanged_paths.contains(&symbol.file_path) {
+                previous_symbols
+                    .entry(symbol.file_path.as_str())
+                    .or_default()
+                    .push(symbol);
+            }
+        }
+        // A symbol in an unchanged file is never re-parsed, so nothing else will
+        // re-create the edges that leave it.
+        let preserved_ids: HashSet<&str> = existing
+            .iter()
+            .filter(|symbol| unchanged_paths.contains(&symbol.file_path))
+            .map(|symbol| symbol.id.as_str())
+            .collect();
+        let mut carried_edges: Vec<CarriedEdge> = Vec::new();
+
         // Prune symbols/edges/embeddings for deleted and changed files.
         for path in &deleted_paths {
             let removed = self
@@ -163,6 +183,31 @@ impl GraphMemoryService {
         }
         for file in &changed_files {
             let path = file.display().to_string();
+
+            // Rewriting a file's symbols deletes every edge that touches them,
+            // including edges written by files we are not re-parsing. Those
+            // would otherwise stay gone until their own source file was edited,
+            // so the graph would quietly decay on every edit. Carry them across,
+            // keyed by the declaration they pointed at.
+            if let Some(previous) = previous_symbols.get(path.as_str()) {
+                for symbol in previous {
+                    for edge in self.repository.find_incoming_edges(&symbol.id).await? {
+                        if !preserved_ids.contains(edge.source_id.as_str()) {
+                            continue;
+                        }
+                        carried_edges.push(CarriedEdge {
+                            target_file: path.clone(),
+                            target_name: symbol.name.to_lowercase(),
+                            target_kind: symbol.kind.clone(),
+                            source_id: edge.source_id.clone(),
+                            edge_type: edge.edge_type,
+                            weight: edge.weight,
+                            created_at: edge.created_at.clone(),
+                        });
+                    }
+                }
+            }
+
             let removed = self
                 .repository
                 .delete_symbols_for_file(project_id, &path)
@@ -184,6 +229,8 @@ impl GraphMemoryService {
 
         let mut symbols_indexed = 0usize;
         let mut edges_indexed = 0usize;
+        let mut edges_reconnected = 0usize;
+        let mut new_symbol_ids: HashMap<(String, String, String), Vec<String>> = HashMap::new();
         let mut embedded = 0usize;
         let mut embed_failures = 0usize;
 
@@ -246,6 +293,10 @@ impl GraphMemoryService {
                 self.repository.upsert_symbol(&symbol).await?;
                 symbols_indexed += 1;
                 if indexable_kind(chunk.kind) {
+                    new_symbol_ids
+                        .entry((file_path.clone(), name_key.clone(), kind.to_string()))
+                        .or_default()
+                        .push(id.clone());
                     name_index
                         .entry(name_key)
                         .or_default()
@@ -399,6 +450,42 @@ impl GraphMemoryService {
         )
         .await;
 
+        // Restore the edges the rewrite could not: links from untouched files to
+        // declarations that still exist here. Only an unambiguous match — one
+        // declaration of that name and kind in the file — is restored, so a
+        // rename drops the edge instead of pointing it at a guess. The edge id
+        // is derived from its endpoints, which makes this idempotent.
+        for carried in &carried_edges {
+            let key = (
+                carried.target_file.clone(),
+                carried.target_name.clone(),
+                carried.target_kind.clone(),
+            );
+            let Some(ids) = new_symbol_ids.get(&key) else {
+                continue;
+            };
+            if ids.len() != 1 || ids[0] == carried.source_id {
+                continue;
+            }
+            let edge = GraphEdge {
+                id: content_hash(&format!(
+                    "{}\0{}\0{}",
+                    carried.source_id,
+                    ids[0],
+                    carried.edge_type.as_str()
+                )),
+                project_id: project_id.to_string(),
+                source_id: carried.source_id.clone(),
+                target_id: ids[0].clone(),
+                edge_type: carried.edge_type,
+                weight: carried.weight,
+                metadata: None,
+                created_at: carried.created_at.clone(),
+            };
+            self.repository.upsert_edge(&edge).await?;
+            edges_reconnected += 1;
+        }
+
         Ok(IndexReport {
             project_id: project_id.to_string(),
             files_indexed: changed_files.len(),
@@ -406,6 +493,7 @@ impl GraphMemoryService {
             files_removed,
             symbols_indexed,
             edges_indexed,
+            edges_reconnected,
             embedded,
             embed_failures,
         })
@@ -951,6 +1039,19 @@ struct DeferredEdge {
     target_name: String,
     /// Where the reference was written, used to prefer the narrowest scope.
     scope: Arc<ReferenceScope>,
+    created_at: String,
+}
+
+/// An edge from an untouched file, held across the rewrite of the file it
+/// points into.
+struct CarriedEdge {
+    target_file: String,
+    /// Lowercased declaration name, matching the name index.
+    target_name: String,
+    target_kind: String,
+    source_id: String,
+    edge_type: EdgeType,
+    weight: f64,
     created_at: String,
 }
 
@@ -2112,5 +2213,108 @@ mod tests {
                 (target, edge.weight)
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn editing_one_file_keeps_callers_from_untouched_files() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "caller.go",
+            "package main\n\nfunc caller() {\n\tcallee()\n}\n",
+        );
+        write_source(
+            dir.path(),
+            "callee.go",
+            "package main\n\nfunc callee() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+        let callee = function_named(&service, "callee").await;
+        assert_eq!(
+            edges_of_type(&service, &callee.id, "calls", false)
+                .await
+                .len(),
+            1
+        );
+
+        // Edit the file being called into. caller.go is not re-parsed, so only
+        // the carried edge can keep the caller attached.
+        write_source(
+            dir.path(),
+            "callee.go",
+            "package main\n\nfunc callee() {}\n\n// touched\n",
+        );
+        let report = service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        assert_eq!(report.files_indexed, 1);
+        assert_eq!(report.files_skipped, 1);
+        assert_eq!(
+            report.edges_reconnected, 1,
+            "the caller must survive an edit to the file it calls into"
+        );
+
+        let callee = function_named(&service, "callee").await;
+        let callers = edges_of_type(&service, &callee.id, "calls", false).await;
+        assert_eq!(callers.len(), 1, "caller lost, got {callers:?}");
+
+        // And the restored edge still reaches the caller's source.
+        let context = service
+            .context_for_symbol("p1", &callee.id, 20, "s")
+            .await
+            .unwrap()
+            .unwrap();
+        let names: Vec<&str> = context
+            .callers
+            .iter()
+            .map(|related| related.symbol.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["caller"], "got {names:?}");
+    }
+
+    #[tokio::test]
+    async fn renaming_a_symbol_drops_the_edges_that_pointed_at_it() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "caller.go",
+            "package main\n\nfunc caller() {\n\tcallee()\n}\n",
+        );
+        write_source(
+            dir.path(),
+            "callee.go",
+            "package main\n\nfunc callee() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        // The declaration is gone: the edge must go with it rather than be
+        // re-pointed at a guess.
+        write_source(
+            dir.path(),
+            "callee.go",
+            "package main\n\nfunc renamed() {}\n",
+        );
+        let report = service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        assert_eq!(report.edges_reconnected, 0);
+        let renamed = function_named(&service, "renamed").await;
+        assert!(edges_of_type(&service, &renamed.id, "calls", false)
+            .await
+            .is_empty());
     }
 }
