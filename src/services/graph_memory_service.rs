@@ -42,6 +42,21 @@ const CONTEXT_DISTANCE_DECAY: f32 = 0.5;
 const CONTEXT_MAX_ITEMS: usize = 64;
 /// Rough per-item cost of the outline metadata, in tokens.
 const CONTEXT_OUTLINE_TOKENS: usize = 24;
+/// Confidence of a reference resolved to a symbol declared in the same file.
+///
+/// Edge weight carries resolution confidence. References are resolved by name
+/// alone, so a match is evidence of nothing until a scope narrows it: the
+/// narrower the scope containing the match, the more the edge is trusted.
+/// `assemble_code_context` multiplies a neighbour's score by this weight, so a
+/// project-wide name guess can no longer outrank a real same-package call.
+const RESOLUTION_SAME_FILE: f64 = 1.0;
+/// Same directory: one package in Go, one package folder in Java and Dart.
+const RESOLUTION_SAME_DIR: f64 = 0.9;
+/// The target's directory is named by one of the referencing file's imports.
+const RESOLUTION_IMPORTED: f64 = 0.7;
+/// No scoping evidence at all: the name matched elsewhere in the project. Kept,
+/// because it may still be right, but heavily discounted.
+const RESOLUTION_UNSCOPED: f64 = 0.3;
 
 /// Indexes source into graph memory and answers graph queries.
 pub struct GraphMemoryService {
@@ -157,13 +172,13 @@ impl GraphMemoryService {
 
         // Seed the name index from unchanged files so cross-file references in
         // newly indexed files resolve against the rest of the project.
-        let mut name_index: HashMap<String, Vec<String>> = HashMap::new();
+        let mut name_index: HashMap<String, Vec<NameCandidate>> = HashMap::new();
         for sym in &existing {
             if unchanged_paths.contains(&sym.file_path) && kind_indexable(&sym.kind) {
                 name_index
                     .entry(sym.name.to_lowercase())
                     .or_default()
-                    .push(sym.id.clone());
+                    .push(NameCandidate::new(&sym.id, &sym.file_path, root));
             }
         }
 
@@ -231,10 +246,17 @@ impl GraphMemoryService {
                 self.repository.upsert_symbol(&symbol).await?;
                 symbols_indexed += 1;
                 if indexable_kind(chunk.kind) {
-                    name_index.entry(name_key).or_default().push(id.clone());
+                    name_index
+                        .entry(name_key)
+                        .or_default()
+                        .push(NameCandidate::new(&id, &file_path, root));
                 }
                 chunk_ids.push(id);
             }
+
+            // What this file can see: where it lives and what it imports. Used
+            // below to resolve its references to the narrowest matching scope.
+            let scope = Arc::new(ReferenceScope::new(file, root, &chunks));
 
             // Structural (contains) and import edges.
             for (i, chunk) in chunks.iter().enumerate() {
@@ -274,6 +296,7 @@ impl GraphMemoryService {
                         source_id: chunk_ids[i].clone(),
                         edge_type,
                         target_name: reference.name.clone(),
+                        scope: scope.clone(),
                         created_at: now.clone(),
                     });
                 }
@@ -284,6 +307,13 @@ impl GraphMemoryService {
             if let Some(store) = &self.embedding_store {
                 let mut batch: Vec<(String, String, String)> = Vec::new();
                 for (i, chunk) in chunks.iter().enumerate() {
+                    // Package and import declarations are structural: they are
+                    // never a useful retrieval seed. On a real Go repo they were
+                    // 270 of 1678 vectors, crowding the candidate pool and
+                    // forcing the over-fetch that keeps seeds useful.
+                    if matches!(chunk.kind, ChunkKind::Package | ChunkKind::Import) {
+                        continue;
+                    }
                     if chunk.text.trim().is_empty() {
                         embed_failures += 1;
                         continue;
@@ -301,29 +331,51 @@ impl GraphMemoryService {
             }
         }
 
-        // Resolve deferred call/inherit/reference names against the full
-        // project name index, emitting one edge per candidate target. A soft
-        // cap keeps a very common name from producing an edge storm.
+        // Resolve deferred call/inherit/reference names against the project name
+        // index. A name is linked to the *narrowest* scope that contains a match
+        // — same file, then same directory (one package), then a directory the
+        // referencing file imports — and only falls back to a project-wide guess
+        // when nothing narrower matches. The scope reached becomes the edge
+        // weight, so a guess is still recorded without being able to outrank a
+        // real call when context is assembled.
         for deferred_edge in &deferred {
-            let Some(targets) = name_index.get(&deferred_edge.target_name.to_lowercase()) else {
+            let Some(candidates) = name_index.get(&deferred_edge.target_name.to_lowercase()) else {
                 continue;
             };
-            for target_id in targets.iter().take(MAX_EDGE_TARGETS) {
-                if *target_id == deferred_edge.source_id {
+
+            let mut best: Option<ResolutionScope> = None;
+            let mut targets: Vec<&NameCandidate> = Vec::new();
+            for candidate in candidates {
+                if candidate.id == deferred_edge.source_id {
                     continue;
                 }
+                let candidate_scope = deferred_edge.scope.scope_for(candidate);
+                if best.is_none_or(|best| candidate_scope > best) {
+                    best = Some(candidate_scope);
+                    targets.clear();
+                    targets.push(candidate);
+                } else if best == Some(candidate_scope) {
+                    targets.push(candidate);
+                }
+            }
+            // Nothing but the referencing symbol itself: no edge to draw.
+            let Some(best) = best else {
+                continue;
+            };
+
+            for target in targets.iter().take(MAX_EDGE_TARGETS) {
                 let edge = GraphEdge {
                     id: content_hash(&format!(
                         "{}\0{}\0{}",
                         deferred_edge.source_id,
-                        target_id,
+                        target.id,
                         deferred_edge.edge_type.as_str()
                     )),
                     project_id: project_id.to_string(),
                     source_id: deferred_edge.source_id.clone(),
-                    target_id: target_id.clone(),
+                    target_id: target.id.clone(),
                     edge_type: deferred_edge.edge_type,
-                    weight: 1.0,
+                    weight: best.weight(),
                     metadata: None,
                     created_at: deferred_edge.created_at.clone(),
                 };
@@ -406,6 +458,12 @@ impl GraphMemoryService {
                 if neighbour.id == symbol.id {
                     continue;
                 }
+                // A file "contains" its symbols, so the file node shows up as a
+                // caller of everything inside it. That is structure, not usage,
+                // and it drowns out real callers.
+                if neighbour.kind == "file" {
+                    continue;
+                }
                 callers.push(RelatedSymbol {
                     edge_type: edge.edge_type,
                     symbol: SymbolOutline::from(&neighbour),
@@ -426,6 +484,9 @@ impl GraphMemoryService {
             }
             if let Some(neighbour) = self.repository.find_symbol(&edge.target_id).await? {
                 if neighbour.id == symbol.id {
+                    continue;
+                }
+                if neighbour.kind == "file" {
                     continue;
                 }
                 callees.push(RelatedSymbol {
@@ -557,7 +618,10 @@ impl GraphMemoryService {
                 if symbol.project_id != project_id || !kind_indexable(&symbol.kind) {
                     continue;
                 }
-                let neighbour_score = score * CONTEXT_DISTANCE_DECAY;
+                // Edge weight is how much the resolver trusted this link: a
+                // project-wide name guess must not outrank a real call.
+                let neighbour_score =
+                    score * CONTEXT_DISTANCE_DECAY * edge.weight.clamp(0.0, 1.0) as f32;
                 match neighbours.entry(symbol.id.clone()) {
                     Entry::Vacant(slot) => {
                         slot.insert((neighbour_score, edge.edge_type, symbol));
@@ -885,7 +949,183 @@ struct DeferredEdge {
     source_id: String,
     edge_type: EdgeType,
     target_name: String,
+    /// Where the reference was written, used to prefer the narrowest scope.
+    scope: Arc<ReferenceScope>,
     created_at: String,
+}
+
+/// A symbol a reference could resolve to, with the scope it lives in.
+struct NameCandidate {
+    id: String,
+    file_path: String,
+    /// Directory of the declaration, relative to the indexed root.
+    dir: String,
+}
+
+impl NameCandidate {
+    fn new(id: &str, file_path: &str, root: &Path) -> Self {
+        Self {
+            id: id.to_string(),
+            file_path: file_path.to_string(),
+            dir: relative_dir(file_path, root),
+        }
+    }
+}
+
+/// How well a reference's own scope matches a candidate declaration, ordered
+/// from weakest to strongest evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ResolutionScope {
+    /// The name matched somewhere else in the project and nothing links it here.
+    Unscoped,
+    /// The target's directory is named by one of the referencing file's imports.
+    Imported,
+    /// Same directory: one package in Go, one package folder in Java and Dart.
+    Directory,
+    /// Declared in the very file that references it.
+    File,
+}
+
+impl ResolutionScope {
+    /// Edge weight this scope earns.
+    fn weight(self) -> f64 {
+        match self {
+            ResolutionScope::File => RESOLUTION_SAME_FILE,
+            ResolutionScope::Directory => RESOLUTION_SAME_DIR,
+            ResolutionScope::Imported => RESOLUTION_IMPORTED,
+            ResolutionScope::Unscoped => RESOLUTION_UNSCOPED,
+        }
+    }
+}
+
+/// What one source file can see: its own location and the modules it imports.
+struct ReferenceScope {
+    file_path: String,
+    dir: String,
+    imports: Vec<String>,
+}
+
+impl ReferenceScope {
+    fn new(file: &Path, root: &Path, chunks: &[SemanticChunk]) -> Self {
+        let file_path = file.display().to_string();
+        let imports = chunks
+            .iter()
+            .filter(|chunk| chunk.kind == ChunkKind::Import)
+            .flat_map(import_targets)
+            .filter(|target| !target.trim().is_empty())
+            .collect();
+        Self {
+            dir: relative_dir(&file_path, root),
+            file_path,
+            imports,
+        }
+    }
+
+    /// Narrowest scope that links this file to `candidate`.
+    fn scope_for(&self, candidate: &NameCandidate) -> ResolutionScope {
+        if candidate.file_path == self.file_path {
+            return ResolutionScope::File;
+        }
+        if !self.dir.is_empty() && candidate.dir == self.dir {
+            return ResolutionScope::Directory;
+        }
+        if self
+            .imports
+            .iter()
+            .any(|import| import_matches_dir(import, &candidate.dir))
+        {
+            return ResolutionScope::Imported;
+        }
+        ResolutionScope::Unscoped
+    }
+}
+
+/// Directory of `path` relative to the indexed root, `/`-separated.
+fn relative_dir(path: &str, root: &Path) -> String {
+    let path = Path::new(path);
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    relative
+        .parent()
+        .map(|parent| parent.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
+}
+
+/// Every module path one import chunk pulls in.
+///
+/// A Go `import ( ... )` block is a single syntax node holding many paths, so
+/// reading only the first one leaves a file's imports almost entirely invisible
+/// to scope resolution — and its cross-package calls with nothing to match
+/// against.
+fn import_targets(chunk: &SemanticChunk) -> Vec<String> {
+    let quoted = quoted_strings(&chunk.text);
+    if quoted.is_empty() {
+        // Java writes imports unquoted: `import java.util.List;`.
+        return vec![import_target(chunk)];
+    }
+    quoted
+}
+
+/// Quoted literals in a declaration, in order.
+fn quoted_strings(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '"' && c != '\'' {
+            continue;
+        }
+        let quote = c;
+        let mut value = String::new();
+        while let Some(c) = chars.next() {
+            if c == quote {
+                break;
+            }
+            if c == '\\' {
+                if let Some(escaped) = chars.next() {
+                    value.push(escaped);
+                }
+                continue;
+            }
+            value.push(c);
+        }
+        out.push(value);
+    }
+    out
+}
+
+/// Whether an import target names `dir`.
+///
+/// Import targets are written as Go module paths
+/// (`github.com/acme/app/internal/booking`), Dart package URIs
+/// (`package:app/internal/booking/service.dart`) or Java package names
+/// (`com.acme.app.booking`), while `dir` is a plain path relative to the
+/// indexed root. The two describe the same place when either one's path
+/// segments contain the other's as a contiguous run.
+fn import_matches_dir(import: &str, dir: &str) -> bool {
+    if dir.is_empty() {
+        return false;
+    }
+    let trimmed = import.trim().trim_matches(|c| c == '\'' || c == '"');
+    let trimmed = trimmed.strip_prefix("package:").unwrap_or(trimmed);
+    let trimmed = trimmed.trim_end_matches('/');
+    let import_segments = path_segments(trimmed);
+    let dir_segments = path_segments(dir);
+    contains_segments(&import_segments, &dir_segments)
+        || contains_segments(&dir_segments, &import_segments)
+}
+
+fn path_segments(path: &str) -> Vec<&str> {
+    path.split(['/', '.'])
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty() && *segment != "..")
+        .collect()
+}
+
+fn contains_segments(haystack: &[&str], needle: &[&str]) -> bool {
+    !needle.is_empty()
+        && needle.len() <= haystack.len()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 /// Upper bound on how many same-named symbols a single reference links to.
@@ -1032,6 +1272,7 @@ mod tests {
     use crate::db::connection_pool::ConnectionPool;
     use crate::embedding::DeterministicEmbeddingBackend;
     use crate::infrastructure::{SqliteEmbeddingRepository, SqliteGraphRepository};
+    use crate::parser::chunker::chunk_source;
     use std::time::Duration;
 
     /// Test service over the *real* schema, foreign keys included.
@@ -1177,11 +1418,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(report.embedded > 0);
-        // Every non-empty chunk in the file is embedded via one batched call.
-        assert!(
-            report.embedded >= 2,
-            "expected the whole file to be embedded, got {}",
+        // The file declares a package, an import and one function. Only the
+        // function is worth searching for, so only it reaches the backend:
+        // structural chunks are skipped rather than embedded as noise.
+        assert_eq!(
+            report.embedded, 1,
+            "package and import chunks must not be embedded, got {}",
             report.embedded
         );
         assert_eq!(report.embed_failures, 0);
@@ -1596,5 +1838,279 @@ mod tests {
             .unwrap();
         assert!(other.items.is_empty());
         assert!(other.token_estimate == 0);
+    }
+
+    #[test]
+    fn import_targets_match_directories_by_path_segments() {
+        // A Go module path, a Dart package URI and a Java package name all name
+        // the same directory shape.
+        assert!(import_matches_dir(
+            "github.com/acme/app/internal/booking",
+            "internal/booking"
+        ));
+        assert!(import_matches_dir(
+            "package:app/internal/booking/service.dart",
+            "internal/booking"
+        ));
+        assert!(import_matches_dir("com.acme.app.booking", "booking"));
+        assert!(import_matches_dir(
+            "'./internal/booking'",
+            "internal/booking"
+        ));
+        // A sibling package, a stdlib import and an empty dir must not match.
+        assert!(!import_matches_dir(
+            "github.com/acme/app/internal/auth",
+            "internal/booking"
+        ));
+        assert!(!import_matches_dir("fmt", "internal/booking"));
+        assert!(!import_matches_dir("github.com/acme/app", ""));
+    }
+
+    #[tokio::test]
+    async fn resolution_prefers_the_same_package_over_a_name_match() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/booking")).unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/auth")).unwrap();
+        write_source(
+            &dir.path().join("internal/booking"),
+            "handler.go",
+            "package booking\n\nfunc Confirm() {}\n",
+        );
+        write_source(
+            &dir.path().join("internal/booking"),
+            "service.go",
+            "package booking\n\nfunc Handle() {\n\tConfirm()\n}\n",
+        );
+        write_source(
+            &dir.path().join("internal/auth"),
+            "service.go",
+            "package auth\n\nfunc Confirm() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let handle = function_named(&service, "Handle").await;
+        let calls = edges_of_type(&service, &handle.id, "calls", true).await;
+        assert_eq!(
+            calls.len(),
+            1,
+            "a same-package match must win outright, got {:?}",
+            calls
+        );
+        assert_eq!(calls[0].1, RESOLUTION_SAME_DIR);
+
+        let auth_confirm = function_named(&service, "Confirm").await.file_path.clone();
+        assert!(
+            auth_confirm.contains("internal/auth"),
+            "expected the call to resolve inside booking, got {auth_confirm}"
+        );
+    }
+
+    #[test]
+    fn an_import_block_exposes_every_path_it_pulls_in() {
+        let source = "package booking\n\nimport (\n\t\"errors\"\n\t\"time\"\n\n\tplatformDB \"github.com/acme/app/internal/platform/db\"\n\t\"github.com/acme/app/internal/auth\"\n)\n\nfunc Handle() {}\n";
+        let chunks = chunk_source(SourceLanguage::Go, source).unwrap();
+        let imports: Vec<String> = chunks
+            .iter()
+            .filter(|chunk| chunk.kind == ChunkKind::Import)
+            .flat_map(import_targets)
+            .collect();
+        assert_eq!(
+            imports,
+            vec![
+                "errors",
+                "time",
+                "github.com/acme/app/internal/platform/db",
+                "github.com/acme/app/internal/auth"
+            ],
+            "an import block must yield every path, got {imports:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolution_uses_an_import_when_no_same_package_match_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/booking")).unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/auth")).unwrap();
+        write_source(
+            &dir.path().join("internal/auth"),
+            "token.go",
+            "package auth\n\nfunc Parse() {}\n",
+        );
+        write_source(
+            &dir.path().join("internal/booking"),
+            "service.go",
+            "package booking\n\nimport \"github.com/acme/app/internal/auth\"\n\nfunc Handle() {\n\tauth.Parse()\n}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let handle = function_named(&service, "Handle").await;
+        let calls = edges_of_type(&service, &handle.id, "calls", true).await;
+        assert_eq!(
+            calls.len(),
+            1,
+            "only the imported package should be linked, got {:?}",
+            calls
+        );
+        assert_eq!(calls[0].1, RESOLUTION_IMPORTED);
+    }
+
+    #[tokio::test]
+    async fn resolution_scopes_calls_through_an_import_block() {
+        // The shape every real Go file has: one block, many paths.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/booking")).unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/auth")).unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/platform/db")).unwrap();
+        write_source(
+            &dir.path().join("internal/auth"),
+            "token.go",
+            "package auth\n\nfunc Parse() {}\n",
+        );
+        write_source(
+            &dir.path().join("internal/platform/db"),
+            "db.go",
+            "package db\n\nfunc Parse() {}\n",
+        );
+        write_source(
+            &dir.path().join("internal/booking"),
+            "service.go",
+            "package booking\n\nimport (\n\t\"errors\"\n\n\t\"github.com/acme/app/internal/auth\"\n\tplatformDB \"github.com/acme/app/internal/platform/db\"\n)\n\nfunc Handle() {\n\tauth.Parse()\n}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let handle = function_named(&service, "Handle").await;
+        let calls = edges_of_type(&service, &handle.id, "calls", true).await;
+        assert_eq!(
+            calls.len(),
+            2,
+            "both imported packages are in scope: {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|(_, weight)| *weight == RESOLUTION_IMPORTED),
+            "imported packages must not be guesses: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolution_discounts_a_project_wide_name_guess() {
+        // Nothing scopes this call: no declaration in the same file or package
+        // and no import naming the target. The edge is kept so the graph does
+        // not lose information, but its weight marks it as a guess.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/booking")).unwrap();
+        std::fs::create_dir_all(dir.path().join("internal/auth")).unwrap();
+        write_source(
+            &dir.path().join("internal/booking"),
+            "service.go",
+            "package booking\n\nfunc Handle() {\n\tParse()\n}\n",
+        );
+        write_source(
+            &dir.path().join("internal/auth"),
+            "token.go",
+            "package auth\n\nfunc Parse() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let handle = function_named(&service, "Handle").await;
+        let calls = edges_of_type(&service, &handle.id, "calls", true).await;
+        assert_eq!(calls.len(), 1, "the guess is kept, got {:?}", calls);
+        assert_eq!(calls[0].1, RESOLUTION_UNSCOPED);
+    }
+
+    #[tokio::test]
+    async fn context_for_symbol_does_not_report_the_file_as_a_caller() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc caller() {\n\tcallee()\n}\n\nfunc callee() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let callee = function_named(&service, "callee").await;
+        let context = service
+            .context_for_symbol("p1", &callee.id, 20, "s")
+            .await
+            .unwrap()
+            .expect("callee should have context");
+
+        let callers: Vec<&str> = context
+            .callers
+            .iter()
+            .map(|related| related.symbol.name.as_str())
+            .collect();
+        assert_eq!(callers, vec!["caller"], "got {callers:?}");
+    }
+
+    /// The one indexed function with this name.
+    async fn function_named(service: &GraphMemoryService, name: &str) -> GraphSymbol {
+        service
+            .search_symbols("p1", name, 20)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.kind == "function" && symbol.name == name)
+            .unwrap_or_else(|| panic!("no function named {name} was indexed"))
+    }
+
+    /// Edges of one type touching `symbol_id`, with their weight.
+    async fn edges_of_type(
+        service: &GraphMemoryService,
+        symbol_id: &str,
+        edge_type: &str,
+        outgoing: bool,
+    ) -> Vec<(String, f64)> {
+        let edges = if outgoing {
+            service
+                .repository
+                .find_outgoing_edges(symbol_id)
+                .await
+                .unwrap()
+        } else {
+            service
+                .repository
+                .find_incoming_edges(symbol_id)
+                .await
+                .unwrap()
+        };
+        edges
+            .into_iter()
+            .filter(|edge| edge.edge_type.as_str() == edge_type)
+            .map(|edge| {
+                let target = if outgoing {
+                    edge.target_id.clone()
+                } else {
+                    edge.source_id.clone()
+                };
+                (target, edge.weight)
+            })
+            .collect()
     }
 }
