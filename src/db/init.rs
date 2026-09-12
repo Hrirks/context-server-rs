@@ -261,5 +261,128 @@ pub fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_analytics_events_entity ON analytics_events(entity_type, entity_id);
         CREATE INDEX IF NOT EXISTS idx_analytics_events_timestamp ON analytics_events(timestamp);
     "#)?;
+    reconcile_columns(conn)?;
+    stamp_schema_version(conn)?;
     Ok(())
+}
+
+/// Columns added to existing tables after their first release.
+///
+/// `CREATE TABLE IF NOT EXISTS` leaves an existing table exactly as it was, so
+/// a database created by an older build never gains a column the current build
+/// writes to - and the failing write only happens on that machine, because a
+/// test suite that builds a fresh database never sees it. Each entry is added
+/// only when missing. Add to this list rather than editing an earlier entry.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("symbol_edges", "weight", "REAL NOT NULL DEFAULT 1.0"),
+    ("symbol_edges", "metadata", "TEXT"),
+    (
+        "context_symbols",
+        "created_at",
+        "TEXT DEFAULT (datetime('now'))",
+    ),
+    (
+        "context_embeddings",
+        "embedding_version",
+        "TEXT NOT NULL DEFAULT '1'",
+    ),
+    (
+        "context_embeddings",
+        "created_at",
+        "TEXT DEFAULT (datetime('now'))",
+    ),
+];
+
+/// Shape of the schema this build expects. Bump it whenever a table changes
+/// shape, so a database written by an older build can be recognised.
+const SCHEMA_VERSION: i64 = 1;
+
+/// Schema version recorded in the database; 0 means it predates versioning.
+pub fn schema_version(conn: &Connection) -> Result<i64> {
+    conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+}
+
+fn reconcile_columns(conn: &Connection) -> Result<()> {
+    for (table, column, declaration) in ADDED_COLUMNS {
+        if !table_exists(conn, table)? || column_exists(conn, table, column)? {
+            continue;
+        }
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {declaration};"
+        ))?;
+    }
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for name in rows {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn stamp_schema_version(conn: &Connection) -> Result<()> {
+    let previous = schema_version(conn)?;
+    if previous != SCHEMA_VERSION {
+        // Worth a line in the log: a database brought forward from an older
+        // build is the first thing to suspect when behaviour differs.
+        tracing::info!("Database schema version {previous} brought up to {SCHEMA_VERSION}");
+    }
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_database_missing_a_column_is_brought_up_to_date() {
+        // A database written before `weight` existed: the table is there, the
+        // column is not, and CREATE TABLE IF NOT EXISTS will never add it.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE symbol_edges (id TEXT PRIMARY KEY, edge_type TEXT NOT NULL);
+             INSERT INTO symbol_edges (id, edge_type) VALUES ('e1', 'calls');",
+        )
+        .unwrap();
+
+        apply_schema(&conn).unwrap();
+
+        assert!(column_exists(&conn, "symbol_edges", "weight").unwrap());
+        // The row written before the column existed picks up the default, so an
+        // old database stays readable rather than failing its next query.
+        let weight: f64 = conn
+            .query_row(
+                "SELECT weight FROM symbol_edges WHERE id = 'e1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(weight, 1.0);
+    }
+
+    #[test]
+    fn applying_the_schema_twice_stamps_one_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 0);
+
+        apply_schema(&conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+
+        apply_schema(&conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
 }
