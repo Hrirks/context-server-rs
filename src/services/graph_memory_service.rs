@@ -260,26 +260,25 @@ impl GraphMemoryService {
                 }
             }
 
-            // Best-effort embedding for semantic search.
+            // Best-effort embedding for semantic search. The whole file's
+            // symbols go through one backend round-trip.
             if let Some(store) = &self.embedding_store {
+                let mut batch: Vec<(String, String, String)> = Vec::new();
                 for (i, chunk) in chunks.iter().enumerate() {
                     if chunk.text.trim().is_empty() {
                         embed_failures += 1;
                         continue;
                     }
-                    match store
-                        .embed_and_store(
-                            &chunk_ids[i],
-                            Some(project_id),
-                            &chunk.text,
-                            Some(kind_str(chunk.kind)),
-                        )
-                        .await
-                    {
-                        Ok(_) => embedded += 1,
-                        Err(_) => embed_failures += 1,
-                    }
+                    batch.push((
+                        chunk_ids[i].clone(),
+                        chunk.text.clone(),
+                        kind_str(chunk.kind).to_string(),
+                    ));
                 }
+
+                let (stored, failed) = store.embed_and_store_batch(Some(project_id), &batch).await;
+                embedded += stored;
+                embed_failures += failed;
             }
         }
 
@@ -897,6 +896,12 @@ mod tests {
             .unwrap();
 
         assert!(report.embedded > 0);
+        // Every non-empty chunk in the file is embedded via one batched call.
+        assert!(
+            report.embedded >= 2,
+            "expected the whole file to be embedded, got {}",
+            report.embedded
+        );
         assert_eq!(report.embed_failures, 0);
     }
 

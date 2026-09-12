@@ -192,7 +192,9 @@ List all development phases for a project in order.
 ### `index_project`
 Index a codebase directory into graph memory: parse sources, build a symbol
 graph (contains/imports/calls/inherits/references edges), and best-effort embed
-symbol text for semantic search.
+symbol text for semantic search. Embeddings for a file are computed in a single
+batched backend request, so indexing costs one round-trip per changed file
+rather than one per symbol.
 
 **Parameters:**
 ```json

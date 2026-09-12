@@ -33,8 +33,8 @@ pub trait EmbeddingService: Send + Sync {
     /// Compute a dense embedding vector for `text`.
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError>;
 
-    /// Embed multiple inputs. The default implementation is sequential.
-    #[allow(dead_code)]
+    /// Embed multiple inputs in one call. The default implementation is
+    /// sequential; backends with a batched wire format should override it.
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         let mut out = Vec::with_capacity(texts.len());
         for text in texts {

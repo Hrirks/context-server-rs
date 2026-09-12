@@ -88,6 +88,74 @@ impl EmbeddingStoreService {
         Ok(embedding)
     }
 
+    /// Embed and persist many context items in one backend round-trip.
+    ///
+    /// Each item is `(context_id, text, content_type)`. Vectors are computed in
+    /// a single [`EmbeddingService::embed_batch`] call and then written
+    /// individually, so one bad row does not discard the rest of the batch.
+    /// Returns `(stored, failed)`.
+    pub async fn embed_and_store_batch(
+        &self,
+        project_id: Option<&str>,
+        items: &[(String, String, String)],
+    ) -> (usize, usize) {
+        if items.is_empty() {
+            return (0, 0);
+        }
+
+        let texts: Vec<&str> = items.iter().map(|(_, text, _)| text.as_str()).collect();
+        let vectors = match self.backend.embed_batch(&texts).await {
+            Ok(vectors) => vectors,
+            Err(error) => {
+                tracing::warn!("Batch embedding of {} items failed: {error}", items.len());
+                return (0, items.len());
+            }
+        };
+
+        if vectors.len() != items.len() {
+            tracing::warn!(
+                "Embedding backend returned {} vectors for {} inputs",
+                vectors.len(),
+                items.len()
+            );
+            return (0, items.len());
+        }
+
+        let mut stored = 0usize;
+        let mut failed = 0usize;
+
+        for ((context_id, text, content_type), vector) in items.iter().zip(vectors) {
+            let now = chrono::Utc::now().to_rfc3339();
+            let embedding = StoredEmbedding {
+                id: Uuid::new_v4().to_string(),
+                context_id: context_id.clone(),
+                project_id: project_id.map(str::to_string),
+                vector,
+                model: self.model.clone(),
+                version: self.version.clone(),
+                content_hash: content_hash(text),
+                content_type: Some(content_type.clone()),
+                content_length: Some(text.len() as i64),
+                tokenization_method: None,
+                preprocessing_steps: None,
+                quality_score: None,
+                custom_metadata: None,
+                created_at: now.clone(),
+                updated_at: Some(now),
+            };
+
+            match self.repository.upsert_embedding(&embedding).await {
+                Ok(()) => stored += 1,
+                Err(error) => {
+                    tracing::warn!("Failed to persist embedding for {context_id}: {error}");
+                    failed += 1;
+                }
+            }
+        }
+
+        (stored, failed)
+    }
+
     /// Cosine-similarity search over a project's stored embeddings.
     ///
     /// Ranking prefers sqlite-vec, which does the distance math inside SQLite
@@ -200,6 +268,57 @@ mod tests {
             "1",
         );
         (pool, service)
+    }
+
+    #[tokio::test]
+    async fn batch_embed_stores_every_item() {
+        let (_pool, service) = build();
+
+        let items = vec![
+            (
+                "ctx-a".to_string(),
+                "alpha".to_string(),
+                "function".to_string(),
+            ),
+            ("ctx-b".to_string(), "beta".to_string(), "class".to_string()),
+            ("ctx-c".to_string(), "gamma".to_string(), "file".to_string()),
+        ];
+
+        let (stored, failed) = service.embed_and_store_batch(Some("p1"), &items).await;
+        assert_eq!(stored, 3);
+        assert_eq!(failed, 0);
+
+        for (id, text, content_type) in &items {
+            let found = service.get_embedding(id).await.unwrap().unwrap();
+            assert_eq!(found.context_id, *id);
+            assert_eq!(found.content_hash, content_hash(text));
+            assert_eq!(found.content_type.as_deref(), Some(content_type.as_str()));
+        }
+
+        // Empty input is a no-op, not an error.
+        assert_eq!(service.embed_and_store_batch(Some("p1"), &[]).await, (0, 0));
+    }
+
+    #[tokio::test]
+    async fn batch_embed_counts_empty_text_as_failure() {
+        let (_pool, service) = build();
+        // The deterministic backend rejects blank input, so the whole batch
+        // fails rather than silently storing junk — and every item is counted.
+        let items = vec![
+            (
+                "ctx-a".to_string(),
+                "alpha".to_string(),
+                "function".to_string(),
+            ),
+            (
+                "ctx-b".to_string(),
+                "   ".to_string(),
+                "function".to_string(),
+            ),
+        ];
+        let (stored, failed) = service.embed_and_store_batch(Some("p1"), &items).await;
+        assert_eq!(stored, 0);
+        assert_eq!(failed, 2);
     }
 
     #[tokio::test]
