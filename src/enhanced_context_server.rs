@@ -10,6 +10,17 @@ use rmcp::{handler::server::ServerHandler, model::ErrorData as McpError, model::
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Build the code-retrieval query from the metadata parameters when the caller
+/// did not pass an explicit `query`.
+fn code_query_text(feature_area: &str, task_type: &str, components: &[String]) -> String {
+    std::iter::once(feature_area)
+        .chain(std::iter::once(task_type))
+        .chain(components.iter().map(String::as_str))
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Enhanced MCP Context Server with SOLID principles and comprehensive CRUD operations
 #[derive(Clone)]
 pub struct EnhancedContextMcpServer {
@@ -52,16 +63,19 @@ impl ServerHandler for EnhancedContextMcpServer {
             // Core Context Query Tool
             Tool {
                 name: "query_context".into(),
-                description: Some("Query project context based on feature area, task type, and components".into()),
+                description: Some("Assemble the context needed for a development task: curated project metadata (business rules, architectural decisions, performance requirements) plus a token-budgeted bundle of the actual code. Code is retrieved by semantic search over the indexed project, expanded one hop through the call/inheritance graph, ranked by relevance and graph distance, and cut at token_budget. Prefer this over reading files: it returns the relevant symbols' source instead of whole files.".into()),
                 input_schema: Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
+                        "query": {"type": "string", "description": "Natural-language description of what you are implementing or looking for. Drives code retrieval. When omitted it is built from feature_area, task_type and components."},
                         "feature_area": {"type": "string", "description": "The feature area (e.g., 'authentication', 'user_interface', 'payments')"},
                         "task_type": {"type": "string", "description": "The type of task ('implement', 'fix', 'optimize')"},
-                        "components": {"type": "array", "items": {"type": "string"}, "description": "List of components involved"}
+                        "components": {"type": "array", "items": {"type": "string"}, "description": "List of components involved"},
+                        "token_budget": {"type": "integer", "description": "Approximate token cap for the returned code bundle", "default": 4000},
+                        "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
                     },
-                    "required": ["project_id", "feature_area", "task_type", "components"]
+                    "required": ["project_id"]
                 }).as_object().unwrap().clone()),
                 annotations: None,
             },
@@ -653,15 +667,11 @@ impl ServerHandler for EnhancedContextMcpServer {
                 let feature_area = args
                     .get("feature_area")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        McpError::invalid_params("Missing required parameter: feature_area", None)
-                    })?;
-                let task_type =
-                    args.get("task_type")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            McpError::invalid_params("Missing required parameter: task_type", None)
-                        })?;
+                    .unwrap_or_default();
+                let task_type = args
+                    .get("task_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 let components: Vec<String> = args
                     .get("components")
                     .and_then(|v| v.as_array())
@@ -671,6 +681,23 @@ impl ServerHandler for EnhancedContextMcpServer {
                             .collect()
                     })
                     .unwrap_or_default();
+
+                // What the code retriever searches for: an explicit natural
+                // language query when given, otherwise the task description.
+                let code_query = args
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .filter(|q| !q.trim().is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| code_query_text(feature_area, task_type, &components));
+                let token_budget = args
+                    .get("token_budget")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(4000) as usize;
+                let session_id = args
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
 
                 let query_result = self
                     .container
@@ -702,7 +729,38 @@ impl ServerHandler for EnhancedContextMcpServer {
                             tracing::warn!("Failed to track analytics event: {}", e);
                         }
 
-                        let content = serde_json::to_string_pretty(&result).map_err(|e| {
+                        // Merge the metadata answer with the retrieved code.
+                        // A retrieval failure degrades to metadata-only rather
+                        // than failing the whole query.
+                        let mut payload = serde_json::to_value(&result).map_err(|e| {
+                            McpError::internal_error(format!("Serialization error: {e}"), None)
+                        })?;
+                        match self
+                            .container
+                            .graph_memory_service
+                            .assemble_code_context(
+                                project_id,
+                                &code_query,
+                                token_budget,
+                                session_id,
+                            )
+                            .await
+                        {
+                            Ok(code_context) => {
+                                if let Some(object) = payload.as_object_mut() {
+                                    object.insert(
+                                        "code_context".to_string(),
+                                        serde_json::to_value(&code_context)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!("Code context assembly failed: {error}");
+                            }
+                        }
+
+                        let content = serde_json::to_string_pretty(&payload).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))
@@ -988,15 +1046,12 @@ impl ServerHandler for EnhancedContextMcpServer {
                         // Core Context Operations
                         ToolInfo {
                             name: "query_context".to_string(),
-                            description: "Query project context with AI-powered intelligence".to_string(),
+                            description: "Assemble curated project metadata plus a token-budgeted bundle of the relevant code".to_string(),
                             category: "Core".to_string(),
                             required_params: vec![
                                 "project_id".to_string(),
-                                "feature_area".to_string(),
-                                "task_type".to_string(),
-                                "components".to_string(),
                             ],
-                            example_use: "Get curated context for implementing authentication features".to_string(),
+                            example_use: "query_context with query='where are payments refunded' and token_budget=6000 to get the relevant symbols' source instead of whole files".to_string(),
                         },
                         // Universal CRUD Operations
                         ToolInfo {
@@ -1283,7 +1338,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                         UsageExample {
                             scenario: "AI-powered development assistance".to_string(),
                             steps: vec![
-                                "1. query_context with feature_area, task_type, and components".to_string(),
+                                "1. index_project to parse and embed the codebase, then query_context with a natural-language query and token_budget to pull only the relevant symbols".to_string(),
                                 "2. validate_architecture to check for Clean Architecture compliance".to_string(),
                                 "3. get_context_insights for project-level analytics and patterns".to_string(),
                                 "4. generate_quality_report to assess context health and get recommendations".to_string(),

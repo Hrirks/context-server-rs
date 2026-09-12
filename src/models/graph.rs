@@ -201,6 +201,58 @@ pub struct SymbolContext {
     pub truncated: bool,
 }
 
+/// Where an assembled context item came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextOrigin {
+    /// The symbol matched the query directly (semantic or name search).
+    Seed,
+    /// The symbol was pulled in by expanding the graph around a seed.
+    Neighbor,
+}
+
+/// One symbol in an assembled code-context bundle, with its source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeContextItem {
+    pub symbol: SymbolOutline,
+    pub file_path: String,
+    pub language: String,
+    pub origin: ContextOrigin,
+    /// Cosine similarity to the query. Only set for semantic seeds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity: Option<f32>,
+    /// Graph hops from the nearest seed; `0` for seeds themselves.
+    pub distance: usize,
+    /// Ranking score: seed similarity discounted by graph distance.
+    pub score: f32,
+    /// Edge type used to reach a neighbour, e.g. `calls` or `inherits`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<EdgeType>,
+    /// The symbol's own source, sliced from its file.
+    pub source: String,
+    /// Estimated tokens for `source` plus this item's metadata.
+    pub token_estimate: usize,
+}
+
+/// A token-budgeted bundle of code assembled for a natural-language query.
+///
+/// This is the retrieval entry point: seeds come from semantic search (falling
+/// back to name search), each seed is expanded one hop through the graph, and
+/// the union is ranked by similarity discounted by distance and cut at a token
+/// budget. `truncated` reports when the budget (or the item cap) bit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeContext {
+    pub project_id: String,
+    pub query: String,
+    pub token_budget: usize,
+    /// Estimated tokens across all returned items.
+    pub token_estimate: usize,
+    pub truncated: bool,
+    /// `true` when seeds came from semantic search, `false` for name search.
+    pub semantic: bool,
+    pub items: Vec<CodeContextItem>,
+}
+
 /// A record in the conversation-memory delta log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMemory {

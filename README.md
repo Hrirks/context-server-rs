@@ -115,17 +115,69 @@ Once connected, clients can discover and use these MCP tools:
 ### Core Project Management
 
 ### `query_context`
-Query project context based on feature area, task type, and components.
+Assemble the context for a development task. Returns two things:
+
+1. **Curated project metadata** — business rules, architectural decisions and
+   performance requirements matching the task.
+2. **`code_context`** — a token-budgeted bundle of the actual code: seeds come
+   from semantic search over the indexed project, each seed is expanded one hop
+   through the call/inheritance graph (so callers and callees come along), and
+   the union is ranked by relevance discounted by graph distance.
 
 **Parameters:**
 ```json
 {
   "project_id": "your-project-id",
-  "feature_area": "authentication", 
-  "task_type": "implement",
-  "components": ["login", "signup"]
+  "query": "where are refunds calculated for a partial payment",
+  "token_budget": 6000,
+  "feature_area": "payments",
+  "task_type": "fix",
+  "components": ["refunds"],
+  "session_id": "default"
 }
 ```
+
+Only `project_id` is required. `query` is what code retrieval searches for; when
+omitted it is built from `feature_area`, `task_type` and `components`. Every
+returned item carries `origin` (`seed` or `neighbor`), `distance` in graph hops,
+`score`, and its `source`, so an agent can read the relevant symbols instead of
+whole files and still see *why* each symbol was included.
+
+```json
+{
+  "code_context": {
+    "query": "where are refunds calculated for a partial payment",
+    "token_budget": 6000,
+    "token_estimate": 842,
+    "truncated": false,
+    "semantic": true,
+    "items": [
+      {
+        "symbol": { "name": "calculateRefund", "kind": "function", "start_line": 42, "end_line": 58 },
+        "origin": "seed",
+        "similarity": 0.71,
+        "distance": 0,
+        "score": 0.71,
+        "source": "fn calculate_refund(...) { ... }",
+        "token_estimate": 210
+      },
+      {
+        "symbol": { "name": "PaymentService", "kind": "struct" },
+        "origin": "neighbor",
+        "distance": 1,
+        "score": 0.355,
+        "via": "calls",
+        "token_estimate": 96
+      }
+    ]
+  }
+}
+```
+
+Seeding falls back to name search when no embedding backend is configured or the
+backend fails, in which case `semantic` is `false` and no `similarity` is
+reported. Retrieval failures degrade to metadata-only rather than failing the
+call.
 
 ### `list_projects`
 List all available projects in the context database.
@@ -188,6 +240,10 @@ Create and track development phases for project management.
 List all development phases for a project in order.
 
 ### Graph Memory Tools
+
+The day-to-day entry point is [`query_context`](#query_context) above, which
+composes these primitives (semantic search → one graph hop → token-budgeted
+bundle). The tools below are the primitives themselves.
 
 ### `index_project`
 Index a codebase directory into graph memory: parse sources, build a symbol

@@ -7,6 +7,8 @@
 //! an agent can pull a connected fragment of the codebase without reserializing
 //! whole files.
 
+use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,14 +17,24 @@ use rmcp::model::ErrorData as McpError;
 
 use crate::models::embedding::content_hash;
 use crate::models::graph::{
-    ConversationMemory, EdgeType, GraphEdge, GraphStats, GraphSubgraph, GraphSymbol, IndexReport,
-    IndexedFile, RelatedSymbol, SymbolContext, SymbolOutline, SymbolSource,
+    CodeContext, CodeContextItem, ContextOrigin, ConversationMemory, EdgeType, GraphEdge,
+    GraphStats, GraphSubgraph, GraphSymbol, IndexReport, IndexedFile, RelatedSymbol, SymbolContext,
+    SymbolOutline, SymbolSource,
 };
 use crate::parser::{
     chunk_file_async, discover_sources, ChunkKind, ReferenceKind, SemanticChunk, SourceLanguage,
 };
 use crate::repositories::GraphRepository;
 use crate::services::EmbeddingStoreService;
+
+/// How many query-matching symbols seed one assembled context bundle.
+const CONTEXT_SEED_LIMIT: usize = 8;
+/// Score multiplier applied per graph hop away from a seed.
+const CONTEXT_DISTANCE_DECAY: f32 = 0.5;
+/// Hard cap on bundle size, independent of the token budget.
+const CONTEXT_MAX_ITEMS: usize = 64;
+/// Rough per-item cost of the outline metadata, in tokens.
+const CONTEXT_OUTLINE_TOKENS: usize = 24;
 
 /// Indexes source into graph memory and answers graph queries.
 pub struct GraphMemoryService {
@@ -441,6 +453,225 @@ impl GraphMemoryService {
         }))
     }
 
+    /// Assemble the code needed to answer a natural-language query.
+    ///
+    /// Retrieval runs in three steps: *seed* (semantic search over the embedded
+    /// code, falling back to name search when no embedding backend is
+    /// configured or it fails), *expand* (one graph hop around each seed, both
+    /// inbound and outbound, so callers and callees come along), and *rank*
+    /// (seed similarity discounted by hop distance). Items are appended in
+    /// rank order until `token_budget` estimated tokens are used, so the caller
+    /// controls payload size instead of the repository size.
+    ///
+    /// `truncated` is set when anything was dropped, either by the budget or by
+    /// the item cap.
+    pub async fn assemble_code_context(
+        &self,
+        project_id: &str,
+        query: &str,
+        token_budget: usize,
+        session_id: &str,
+    ) -> Result<CodeContext, McpError> {
+        /// A query match: the symbol, its ranking score, and (for semantic
+        /// hits) the raw cosine similarity.
+        type Seed = (GraphSymbol, f32, Option<f32>);
+
+        // --- Seed ---------------------------------------------------------
+        let mut seeds: Vec<Seed> = Vec::new();
+        let mut semantic = false;
+
+        if let Some(store) = &self.embedding_store {
+            match store.search(query, project_id, CONTEXT_SEED_LIMIT).await {
+                Ok(hits) => {
+                    let mut resolved: Vec<Seed> = Vec::new();
+                    for hit in hits {
+                        let Some(symbol) = self.repository.find_symbol(&hit.context_id).await?
+                        else {
+                            continue;
+                        };
+                        if symbol.project_id != project_id || !kind_indexable(&symbol.kind) {
+                            continue;
+                        }
+                        resolved.push((symbol, hit.similarity.max(0.0), Some(hit.similarity)));
+                    }
+                    if !resolved.is_empty() {
+                        semantic = true;
+                        seeds = resolved;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "Semantic search failed ({error}); falling back to name search for '{query}'"
+                    );
+                }
+            }
+        }
+
+        if seeds.is_empty() {
+            for symbol in self
+                .search_symbols(project_id, query, CONTEXT_SEED_LIMIT)
+                .await?
+            {
+                if kind_indexable(&symbol.kind) {
+                    seeds.push((symbol, 1.0, None));
+                }
+            }
+        }
+
+        // Highest similarity first; `search` already orders, name search does not.
+        seeds.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+
+        // --- Expand -------------------------------------------------------
+        // One hop in both directions: inbound edges are callers/implementors,
+        // outbound are callees/supertypes. Best edge wins when a neighbour is
+        // reachable from several seeds.
+        let mut neighbours: HashMap<String, (f32, EdgeType, GraphSymbol)> = HashMap::new();
+        for (seed, score, _) in &seeds {
+            let mut edges = self.repository.find_incoming_edges(&seed.id).await?;
+            edges.extend(self.repository.find_outgoing_edges(&seed.id).await?);
+
+            for edge in edges {
+                let neighbour_id = if edge.target_id == seed.id {
+                    &edge.source_id
+                } else {
+                    &edge.target_id
+                };
+                if neighbour_id == &seed.id {
+                    continue;
+                }
+                let Some(symbol) = self.repository.find_symbol(neighbour_id).await? else {
+                    continue;
+                };
+                // Whole-file nodes would drag an entire file into the bundle.
+                if symbol.project_id != project_id || !kind_indexable(&symbol.kind) {
+                    continue;
+                }
+                let neighbour_score = score * CONTEXT_DISTANCE_DECAY;
+                match neighbours.entry(symbol.id.clone()) {
+                    Entry::Vacant(slot) => {
+                        slot.insert((neighbour_score, edge.edge_type, symbol));
+                    }
+                    Entry::Occupied(mut slot) => {
+                        if neighbour_score > slot.get().0 {
+                            slot.insert((neighbour_score, edge.edge_type, symbol));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Seeds already carry the best score for themselves; never re-add them.
+        for (seed, _, _) in &seeds {
+            neighbours.remove(&seed.id);
+        }
+
+        let mut ranked_neighbours: Vec<(f32, EdgeType, GraphSymbol)> =
+            neighbours.into_values().collect();
+        ranked_neighbours.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.2.name.cmp(&b.2.name))
+        });
+
+        // --- Pack ---------------------------------------------------------
+        let mut items: Vec<CodeContextItem> = Vec::new();
+        let mut tokens_used = 0usize;
+        let mut truncated = false;
+        let mut source_cache: HashMap<String, Option<String>> = HashMap::new();
+
+        for (symbol, score, similarity) in &seeds {
+            let source = self.source_for_symbol(symbol, &mut source_cache).await;
+            let cost = estimate_tokens(&source) + CONTEXT_OUTLINE_TOKENS;
+            if items.len() >= CONTEXT_MAX_ITEMS || tokens_used + cost > token_budget {
+                truncated = true;
+                continue;
+            }
+            tokens_used += cost;
+            items.push(CodeContextItem {
+                symbol: SymbolOutline::from(symbol),
+                file_path: symbol.file_path.clone(),
+                language: symbol.language.clone(),
+                origin: ContextOrigin::Seed,
+                similarity: *similarity,
+                distance: 0,
+                score: *score,
+                via: None,
+                source,
+                token_estimate: cost,
+            });
+        }
+
+        for (score, edge_type, symbol) in &ranked_neighbours {
+            let source = self.source_for_symbol(symbol, &mut source_cache).await;
+            let cost = estimate_tokens(&source) + CONTEXT_OUTLINE_TOKENS;
+            if items.len() >= CONTEXT_MAX_ITEMS || tokens_used + cost > token_budget {
+                truncated = true;
+                continue;
+            }
+            tokens_used += cost;
+            items.push(CodeContextItem {
+                symbol: SymbolOutline::from(symbol),
+                file_path: symbol.file_path.clone(),
+                language: symbol.language.clone(),
+                origin: ContextOrigin::Neighbor,
+                similarity: None,
+                distance: 1,
+                score: *score,
+                via: Some(*edge_type),
+                source,
+                token_estimate: cost,
+            });
+        }
+
+        let seed_count = seeds.len();
+        let neighbour_count = ranked_neighbours.len();
+
+        self.record_delta(
+            session_id,
+            Some(project_id),
+            "assemble_context",
+            serde_json::json!({
+                "query": query,
+                "seeds": seed_count,
+                "neighbours": neighbour_count,
+                "items": items.len(),
+                "truncated": truncated,
+            }),
+        )
+        .await;
+
+        Ok(CodeContext {
+            project_id: project_id.to_string(),
+            query: query.to_string(),
+            token_budget,
+            token_estimate: tokens_used,
+            truncated,
+            semantic,
+            items,
+        })
+    }
+
+    /// Read one symbol's source lines, caching whole files across a bundle so
+    /// a file is read once even when several of its symbols are included.
+    async fn source_for_symbol(
+        &self,
+        symbol: &GraphSymbol,
+        cache: &mut HashMap<String, Option<String>>,
+    ) -> String {
+        let content = match cache.get(&symbol.file_path).cloned() {
+            Some(cached) => cached,
+            None => {
+                let read = tokio::fs::read_to_string(&symbol.file_path).await.ok();
+                cache.insert(symbol.file_path.clone(), read.clone());
+                read
+            }
+        };
+        match content {
+            Some(text) => slice_lines(&text, symbol.start_line, symbol.end_line),
+            None => symbol.text.clone(),
+        }
+    }
+
     /// Every file currently in a project's index, with its symbol count.
     ///
     /// The human-review surface for an index: answers "what did indexing
@@ -703,6 +934,15 @@ fn slice_lines(source: &str, start_line: usize, end_line: usize) -> String {
         .take(end_line - start_line + 1)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Rough token estimate for source text (~4 characters per token).
+///
+/// Deliberately cheap and dependency-free: the budget only needs to be right
+/// to within a constant factor, and an exact tokenizer would be a heavier
+/// dependency than the problem warrants.
+fn estimate_tokens(text: &str) -> usize {
+    text.len().div_ceil(4)
 }
 
 /// The display name for a chunk; derived from the parse when the grammar did
@@ -1194,5 +1434,133 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn assemble_code_context_seeds_from_semantic_search() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc outer() {\n\tinner()\n}\n\nfunc inner() {}\n",
+        );
+
+        let service = build(true);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let context = service
+            .assemble_code_context("p1", "func inner() {}", 4000, "s")
+            .await
+            .unwrap();
+
+        assert!(context.semantic, "expected the semantic seeding path");
+        assert!(!context.items.is_empty());
+        assert_eq!(context.items[0].origin, ContextOrigin::Seed);
+        assert_eq!(context.items[0].distance, 0);
+        assert!(context.items[0].similarity.is_some());
+        assert!(
+            context.items[0].source.contains("func inner"),
+            "expected the symbol's own source, got {:?}",
+            context.items[0].source
+        );
+        assert!(context.token_estimate <= context.token_budget);
+        assert!(!context.truncated);
+    }
+
+    #[tokio::test]
+    async fn assemble_code_context_expands_one_hop_to_neighbours() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc outer() {\n\tinner()\n}\n\nfunc inner() {}\n",
+        );
+
+        // No embedding store: seeds come from name search, which makes the
+        // expected seeding order deterministic.
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let context = service
+            .assemble_code_context("p1", "outer", 4000, "s")
+            .await
+            .unwrap();
+
+        assert!(!context.semantic, "expected the name-search fallback");
+        assert_eq!(context.items[0].symbol.name, "outer");
+
+        let inner = context
+            .items
+            .iter()
+            .find(|item| item.symbol.name == "inner")
+            .expect("expected inner to be pulled in as a neighbour");
+        assert_eq!(inner.origin, ContextOrigin::Neighbor);
+        assert_eq!(inner.distance, 1);
+        assert!(inner.via.is_some());
+        assert!(inner.source.contains("func inner"));
+        // Seeds rank above their neighbours.
+        assert!(context.items[0].score > inner.score);
+    }
+
+    #[tokio::test]
+    async fn assemble_code_context_stops_at_the_token_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc outer() {\n\tinner()\n}\n\nfunc inner() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        // A budget too small for even one symbol yields nothing, but says so.
+        let starved = service
+            .assemble_code_context("p1", "outer", 1, "s")
+            .await
+            .unwrap();
+        assert!(starved.items.is_empty());
+        assert!(starved.truncated);
+        assert_eq!(starved.token_estimate, 0);
+
+        // A budget that fits the seed only drops the neighbour.
+        let one = service
+            .assemble_code_context("p1", "outer", 40, "s")
+            .await
+            .unwrap();
+        assert!(one.items.len() < 2 || one.truncated);
+        assert!(one.token_estimate <= 40);
+    }
+
+    #[tokio::test]
+    async fn assemble_code_context_is_scoped_to_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc outer() {\n\tinner()\n}\n\nfunc inner() {}\n",
+        );
+
+        let service = build(true);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let other = service
+            .assemble_code_context("p2", "outer", 4000, "s")
+            .await
+            .unwrap();
+        assert!(other.items.is_empty());
+        assert!(other.token_estimate == 0);
     }
 }
