@@ -29,6 +29,13 @@ use crate::services::EmbeddingStoreService;
 
 /// How many query-matching symbols seed one assembled context bundle.
 const CONTEXT_SEED_LIMIT: usize = 8;
+/// Semantic candidates fetched per wanted seed.
+///
+/// Structural chunks (packages, imports) are embedded too but make useless
+/// seeds, and they are dropped *after* the result limit — so the pool has to be
+/// wider than the number of seeds wanted, or a query that happens to match
+/// boilerplate scores zero seeds and silently degrades to name search.
+const CONTEXT_SEED_OVERFETCH: usize = 8;
 /// Score multiplier applied per graph hop away from a seed.
 const CONTEXT_DISTANCE_DECAY: f32 = 0.5;
 /// Hard cap on bundle size, independent of the token budget.
@@ -481,10 +488,14 @@ impl GraphMemoryService {
         let mut semantic = false;
 
         if let Some(store) = &self.embedding_store {
-            match store.search(query, project_id, CONTEXT_SEED_LIMIT).await {
+            let candidates = CONTEXT_SEED_LIMIT * CONTEXT_SEED_OVERFETCH;
+            match store.search(query, project_id, candidates).await {
                 Ok(hits) => {
                     let mut resolved: Vec<Seed> = Vec::new();
                     for hit in hits {
+                        if resolved.len() >= CONTEXT_SEED_LIMIT {
+                            break;
+                        }
                         let Some(symbol) = self.repository.find_symbol(&hit.context_id).await?
                         else {
                             continue;
@@ -581,13 +592,7 @@ impl GraphMemoryService {
 
         for (symbol, score, similarity) in &seeds {
             let source = self.source_for_symbol(symbol, &mut source_cache).await;
-            let cost = estimate_tokens(&source) + CONTEXT_OUTLINE_TOKENS;
-            if items.len() >= CONTEXT_MAX_ITEMS || tokens_used + cost > token_budget {
-                truncated = true;
-                continue;
-            }
-            tokens_used += cost;
-            items.push(CodeContextItem {
+            let mut item = CodeContextItem {
                 symbol: SymbolOutline::from(symbol),
                 file_path: symbol.file_path.clone(),
                 language: symbol.language.clone(),
@@ -597,19 +602,21 @@ impl GraphMemoryService {
                 score: *score,
                 via: None,
                 source,
-                token_estimate: cost,
-            });
-        }
-
-        for (score, edge_type, symbol) in &ranked_neighbours {
-            let source = self.source_for_symbol(symbol, &mut source_cache).await;
-            let cost = estimate_tokens(&source) + CONTEXT_OUTLINE_TOKENS;
+                token_estimate: 0,
+            };
+            let cost = item_cost(&item);
             if items.len() >= CONTEXT_MAX_ITEMS || tokens_used + cost > token_budget {
                 truncated = true;
                 continue;
             }
+            item.token_estimate = cost;
             tokens_used += cost;
-            items.push(CodeContextItem {
+            items.push(item);
+        }
+
+        for (score, edge_type, symbol) in &ranked_neighbours {
+            let source = self.source_for_symbol(symbol, &mut source_cache).await;
+            let mut item = CodeContextItem {
                 symbol: SymbolOutline::from(symbol),
                 file_path: symbol.file_path.clone(),
                 language: symbol.language.clone(),
@@ -619,8 +626,16 @@ impl GraphMemoryService {
                 score: *score,
                 via: Some(*edge_type),
                 source,
-                token_estimate: cost,
-            });
+                token_estimate: 0,
+            };
+            let cost = item_cost(&item);
+            if items.len() >= CONTEXT_MAX_ITEMS || tokens_used + cost > token_budget {
+                truncated = true;
+                continue;
+            }
+            item.token_estimate = cost;
+            tokens_used += cost;
+            items.push(item);
         }
 
         let seed_count = seeds.len();
@@ -936,6 +951,19 @@ fn slice_lines(source: &str, start_line: usize, end_line: usize) -> String {
         .join("\n")
 }
 
+/// Estimated tokens for one item *as the caller receives it*.
+///
+/// Measured on the serialized JSON, not the raw source: escaping indentation,
+/// newlines and quotes roughly doubles the size of source code, so budgeting on
+/// the raw text silently hands the caller a bundle around twice the size it was
+/// promised. The `token_estimate` field itself is written after this, so the
+/// figure excludes its own digits — a rounding error, not a drift.
+fn item_cost(item: &CodeContextItem) -> usize {
+    serde_json::to_string(item)
+        .map(|serialized| estimate_tokens(&serialized))
+        .unwrap_or_else(|_| estimate_tokens(&item.source) + CONTEXT_OUTLINE_TOKENS)
+}
+
 /// Rough token estimate for source text (~4 characters per token).
 ///
 /// Deliberately cheap and dependency-free: the budget only needs to be right
@@ -1006,13 +1034,19 @@ mod tests {
     use crate::infrastructure::{SqliteEmbeddingRepository, SqliteGraphRepository};
     use std::time::Duration;
 
+    /// Test service over the *real* schema, foreign keys included.
+    ///
+    /// The harness deliberately does not disable foreign-key enforcement: with
+    /// it off, a write that production rejects (an embedding whose project row
+    /// is missing, say) persists happily and the test passes while the feature
+    /// is broken.
     fn build(with_embedding: bool) -> GraphMemoryService {
         let pool = Arc::new(ConnectionPool::new(":memory:", 1, Duration::from_secs(1)).unwrap());
         {
             let conn = pool.checkout().unwrap();
-            conn.lock()
-                .unwrap()
-                .execute_batch("PRAGMA foreign_keys = OFF;")
+            let conn = conn.lock().unwrap();
+            crate::db::init::apply_schema(&conn).unwrap();
+            conn.execute("INSERT INTO projects (id, name) VALUES ('p1', 'p1')", [])
                 .unwrap();
         }
         let graph_repo = Arc::new(SqliteGraphRepository::new(pool.clone()));

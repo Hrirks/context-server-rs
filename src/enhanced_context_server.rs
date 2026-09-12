@@ -3263,6 +3263,14 @@ impl ServerHandler for EnhancedContextMcpServer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
 
+                // Embeddings carry a foreign key onto `projects`, so the id has
+                // to exist before indexing or every vector write is rejected
+                // while the symbol and edge writes quietly succeed.
+                self.container
+                    .project_service
+                    .ensure_project(project_id)
+                    .await?;
+
                 let report = self
                     .container
                     .graph_memory_service

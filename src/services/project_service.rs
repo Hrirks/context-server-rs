@@ -15,6 +15,14 @@ pub trait ProjectService: Send + Sync {
     ) -> Result<Project, McpError>;
     #[allow(dead_code)]
     async fn get_project(&self, id: &str) -> Result<Option<Project>, McpError>;
+    /// Register `id` if it is not already a project.
+    ///
+    /// Several tables hang off `projects(id)` by foreign key — `context_embeddings`
+    /// among them. Features that accept a caller-chosen project id (indexing a
+    /// directory, for example) must make that row exist first, otherwise their
+    /// writes are rejected by a constraint while unrelated writes to the same id
+    /// succeed. Idempotent, so it is safe to call before every such operation.
+    async fn ensure_project(&self, id: &str) -> Result<(), McpError>;
     async fn list_projects(&self) -> Result<Vec<Project>, McpError>;
     #[allow(dead_code)]
     async fn update_project(&self, project: &Project) -> Result<Project, McpError>;
@@ -58,6 +66,33 @@ impl<R: ProjectRepository> ProjectService for ProjectServiceImpl<R> {
 
     async fn get_project(&self, id: &str) -> Result<Option<Project>, McpError> {
         self.repository.find_by_id(id).await
+    }
+
+    async fn ensure_project(&self, id: &str) -> Result<(), McpError> {
+        if self.repository.find_by_id(id).await?.is_some() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let project = Project {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: Some(format!("Auto-registered when '{id}' was first used")),
+            repository_url: None,
+            created_at: Some(now.clone()),
+            updated_at: Some(now),
+        };
+        // `create` inserts; a concurrent caller may have won the race, in which
+        // case the row already exists and that is exactly the desired state.
+        match self.repository.create(&project).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                if self.repository.find_by_id(id).await?.is_some() {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
     async fn list_projects(&self) -> Result<Vec<Project>, McpError> {

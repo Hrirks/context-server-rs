@@ -253,10 +253,14 @@ mod tests {
     fn build() -> (Arc<ConnectionPool>, EmbeddingStoreService) {
         let pool = Arc::new(ConnectionPool::new(":memory:", 1, Duration::from_secs(1)).unwrap());
         {
+            // Real schema, real foreign keys: `context_embeddings.project_id`
+            // references `projects`, so the project row must exist for a write
+            // to be accepted. Turning the pragma off here would hide exactly
+            // the failure this suite exists to catch.
             let conn = pool.checkout().unwrap();
-            conn.lock()
-                .unwrap()
-                .execute_batch("PRAGMA foreign_keys = OFF;")
+            let conn = conn.lock().unwrap();
+            crate::db::init::apply_schema(&conn).unwrap();
+            conn.execute("INSERT INTO projects (id, name) VALUES ('p1', 'p1')", [])
                 .unwrap();
         }
         let repo = Arc::new(SqliteEmbeddingRepository::new(pool.clone()));

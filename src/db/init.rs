@@ -6,7 +6,18 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
     // Goes through the centralized opener so WAL / busy_timeout / foreign_keys
     // are applied - never a bare Connection::open.
     let conn = connection::open(db_path)?;
+    apply_schema(&conn)?;
+    Ok(conn)
+}
 
+/// Create every table and index the server expects on an existing connection.
+///
+/// Idempotent (`IF NOT EXISTS`), so it is safe against a live database. Split
+/// out from [`init_db`] so tests can put the *real* schema - foreign keys
+/// included - on a connection they own, instead of hand-rolling a subset and
+/// discovering at runtime that a constraint they never exercised rejects the
+/// write.
+pub fn apply_schema(conn: &Connection) -> Result<()> {
     // Projects table
     conn.execute_batch(
         r#"
@@ -250,5 +261,5 @@ pub fn init_db(db_path: &str) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_analytics_events_entity ON analytics_events(entity_type, entity_id);
         CREATE INDEX IF NOT EXISTS idx_analytics_events_timestamp ON analytics_events(timestamp);
     "#)?;
-    Ok(conn)
+    Ok(())
 }
