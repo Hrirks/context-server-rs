@@ -564,6 +564,21 @@ impl ServerHandler for EnhancedContextMcpServer {
                 annotations: None,
             },
             Tool {
+                name: "get_symbol_context".into(),
+                description: Some("Assemble a budgeted context bundle for one symbol: its source plus the symbols that use it (callers, usages, implementors) and that it uses (callees, supertypes). The token-efficient way to see how a symbol fits into a codebase without reading whole files. Pass an id from get_file_outline or search_symbols.".into()),
+                input_schema: Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"},
+                        "symbol_id": {"type": "string", "description": "The symbol node ID to build context for"},
+                        "budget": {"type": "integer", "description": "Maximum number of related symbols to include", "default": 20},
+                        "session_id": {"type": "string", "description": "Session id for the conversation delta log", "default": "default"}
+                    },
+                    "required": ["project_id", "symbol_id"]
+                }).as_object().unwrap().clone()),
+                annotations: None,
+            },
+            Tool {
                 name: "get_graph_stats".into(),
                 description: Some("Report symbol and edge counts for a project's indexed graph".into()),
                 input_schema: Arc::new(serde_json::json!({
@@ -3221,6 +3236,43 @@ impl ServerHandler for EnhancedContextMcpServer {
                 {
                     Some(source) => {
                         let content = serde_json::to_string_pretty(&source).map_err(|e| {
+                            McpError::internal_error(format!("Serialization error: {e}"), None)
+                        })?;
+                        Ok(CallToolResult::success(vec![Content::text(content)]))
+                    }
+                    None => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No symbol found with id '{symbol_id}' in project '{project_id}'"
+                    ))])),
+                }
+            }
+            "get_symbol_context" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+                let symbol_id =
+                    args.get("symbol_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: symbol_id", None)
+                        })?;
+                let budget = args.get("budget").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+                let session_id = args
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+
+                match self
+                    .container
+                    .graph_memory_service
+                    .context_for_symbol(project_id, symbol_id, budget, session_id)
+                    .await?
+                {
+                    Some(context) => {
+                        let content = serde_json::to_string_pretty(&context).map_err(|e| {
                             McpError::internal_error(format!("Serialization error: {e}"), None)
                         })?;
                         Ok(CallToolResult::success(vec![Content::text(content)]))

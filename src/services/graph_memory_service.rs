@@ -16,7 +16,7 @@ use rmcp::model::ErrorData as McpError;
 use crate::models::embedding::content_hash;
 use crate::models::graph::{
     ConversationMemory, EdgeType, GraphEdge, GraphStats, GraphSubgraph, GraphSymbol, IndexReport,
-    SymbolOutline, SymbolSource,
+    RelatedSymbol, SymbolContext, SymbolOutline, SymbolSource,
 };
 use crate::parser::{
     chunk_file_async, discover_sources, ChunkKind, ReferenceKind, SemanticChunk, SourceLanguage,
@@ -339,6 +339,107 @@ impl GraphMemoryService {
             embedded,
             embed_failures,
         })
+    }
+
+    /// Assemble a budgeted context bundle for a single symbol.
+    ///
+    /// Returns the symbol's own source plus the symbols connected to it: the
+    /// inbound neighbours that reference it (callers, usages, implementors) and
+    /// the outbound neighbours it references (callees, supertypes). `budget`
+    /// caps the total number of neighbours returned, so the payload cannot
+    /// balloon past the caller's token budget; `truncated` reports when the cap
+    /// bit. Returns `None` for an unknown id or one from another project.
+    pub async fn context_for_symbol(
+        &self,
+        project_id: &str,
+        symbol_id: &str,
+        budget: usize,
+        session_id: &str,
+    ) -> Result<Option<SymbolContext>, McpError> {
+        let Some(symbol) = self.repository.find_symbol(symbol_id).await? else {
+            return Ok(None);
+        };
+        if symbol.project_id != project_id {
+            return Ok(None);
+        }
+
+        let source = match tokio::fs::read_to_string(&symbol.file_path).await {
+            Ok(content) => slice_lines(&content, symbol.start_line, symbol.end_line),
+            Err(_) => symbol.text.clone(),
+        };
+
+        let incoming_edges = self.repository.find_incoming_edges(symbol_id).await?;
+        let outgoing_edges = self.repository.find_outgoing_edges(symbol_id).await?;
+
+        let mut truncated = false;
+
+        // Inbound first: "who uses this?" is usually the more valuable direction.
+        let mut callers = Vec::new();
+        let mut seen_callers = HashSet::new();
+        for edge in &incoming_edges {
+            if callers.len() >= budget {
+                truncated = true;
+                break;
+            }
+            if !seen_callers.insert(edge.source_id.clone()) {
+                continue;
+            }
+            if let Some(neighbour) = self.repository.find_symbol(&edge.source_id).await? {
+                if neighbour.id == symbol.id {
+                    continue;
+                }
+                callers.push(RelatedSymbol {
+                    edge_type: edge.edge_type,
+                    symbol: SymbolOutline::from(&neighbour),
+                    incoming: true,
+                });
+            }
+        }
+
+        let mut callees = Vec::new();
+        let mut seen_callees = HashSet::new();
+        for edge in &outgoing_edges {
+            if callers.len() + callees.len() >= budget {
+                truncated = true;
+                break;
+            }
+            if !seen_callees.insert(edge.target_id.clone()) {
+                continue;
+            }
+            if let Some(neighbour) = self.repository.find_symbol(&edge.target_id).await? {
+                if neighbour.id == symbol.id {
+                    continue;
+                }
+                callees.push(RelatedSymbol {
+                    edge_type: edge.edge_type,
+                    symbol: SymbolOutline::from(&neighbour),
+                    incoming: false,
+                });
+            }
+        }
+
+        self.record_delta(
+            session_id,
+            Some(project_id),
+            "context",
+            serde_json::json!({
+                "symbol_id": symbol_id,
+                "callers": callers.len(),
+                "callees": callees.len(),
+                "truncated": truncated,
+            }),
+        )
+        .await;
+
+        Ok(Some(SymbolContext {
+            symbol: SymbolOutline::from(&symbol),
+            file_path: symbol.file_path,
+            language: symbol.language,
+            source,
+            callers,
+            callees,
+            truncated,
+        }))
     }
 
     /// Token-efficient structural outline of one indexed file.
@@ -937,6 +1038,116 @@ mod tests {
 
         assert!(service
             .symbol_source("other-project", &symbol.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn context_for_symbol_reports_callers_and_callees() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc outer() {\n\tinner()\n}\n\nfunc inner() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let inner = service
+            .search_symbols("p1", "inner", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let inner_ctx = service
+            .context_for_symbol("p1", &inner.id, 20, "s")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(inner_ctx.source.contains("func inner"));
+
+        let caller_names: Vec<&str> = inner_ctx
+            .callers
+            .iter()
+            .map(|r| r.symbol.name.as_str())
+            .collect();
+        assert!(
+            caller_names.contains(&"outer"),
+            "expected 'outer' among callers, got {caller_names:?}"
+        );
+        assert!(inner_ctx.callers.iter().all(|r| r.incoming));
+
+        let outer = service
+            .search_symbols("p1", "outer", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let outer_ctx = service
+            .context_for_symbol("p1", &outer.id, 20, "s")
+            .await
+            .unwrap()
+            .unwrap();
+        let callee_names: Vec<&str> = outer_ctx
+            .callees
+            .iter()
+            .map(|r| r.symbol.name.as_str())
+            .collect();
+        assert!(
+            callee_names.contains(&"inner"),
+            "expected 'inner' among callees, got {callee_names:?}"
+        );
+        assert!(outer_ctx.callees.iter().all(|r| !r.incoming));
+    }
+
+    #[tokio::test]
+    async fn context_for_symbol_honours_budget_and_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc outer() {\n\tinner()\n}\n\nfunc inner() {}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s")
+            .await
+            .unwrap();
+
+        let outer = service
+            .search_symbols("p1", "outer", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        // A zero budget returns the symbol itself but no neighbours, flagged.
+        let empty = service
+            .context_for_symbol("p1", &outer.id, 0, "s")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(empty.callers.is_empty());
+        assert!(empty.callees.is_empty());
+        assert!(empty.truncated);
+
+        // Unknown id and cross-project id both resolve to `None`.
+        assert!(service
+            .context_for_symbol("p1", "no-such-symbol", 20, "s")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(service
+            .context_for_symbol("other-project", &outer.id, 20, "s")
             .await
             .unwrap()
             .is_none());

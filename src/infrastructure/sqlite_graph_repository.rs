@@ -265,6 +265,26 @@ impl GraphRepository for SqliteGraphRepository {
         Ok(edges)
     }
 
+    async fn find_incoming_edges(&self, symbol_id: &str) -> Result<Vec<GraphEdge>, McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        let mut stmt = db
+            .prepare(
+                "SELECT id, project_id, source_id, target_id, edge_type, weight, metadata, created_at \
+                 FROM symbol_edges WHERE target_id = ?1",
+            )
+            .map_err(|e| McpError::internal_error(format!("Failed to prepare edge query: {e}"), None))?;
+
+        let edges = stmt
+            .query_map(params![symbol_id], row_to_edge)
+            .map_err(|e| McpError::internal_error(format!("Failed to query edges: {e}"), None))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| McpError::internal_error(format!("Failed to read edges: {e}"), None))?;
+
+        Ok(edges)
+    }
+
     async fn delete_project(&self, project_id: &str) -> Result<(), McpError> {
         let conn = self.checkout()?;
         let db = conn.lock().unwrap();

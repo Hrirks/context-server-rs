@@ -274,6 +274,26 @@ line range. Pass an `id` obtained from `get_file_outline` or `search_symbols`.
 This reads one function/method instead of an entire file — the primary way to
 keep an agent's context small.
 
+### `get_symbol_context`
+Assemble a budgeted context bundle for one symbol: its source, the symbols that
+**use it** (callers, usages, implementors — inbound edges), and the symbols it
+**uses** (callees, supertypes — outbound edges).
+
+**Parameters:**
+```json
+{
+  "project_id": "your-project-id",
+  "symbol_id": "the-symbol-node-id",
+  "budget": 20,
+  "session_id": "default"
+}
+```
+
+`budget` caps the total number of related symbols returned, so the payload can't
+balloon past your token budget; the response's `truncated` flag reports when the
+cap bit. This is the core token-reduction tool: it answers "what do I need to
+know about this symbol" without reading any files.
+
 ### `semantic_search`
 Semantic (cosine-similarity) search over embedded context for a project.
 

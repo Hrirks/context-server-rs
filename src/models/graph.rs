@@ -158,6 +158,40 @@ pub struct SymbolSource {
     pub source: String,
 }
 
+/// One edge of a [`SymbolContext`]: the neighbour on the other end, plus the
+/// relationship and its direction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedSymbol {
+    /// The relationship as seen from the focus symbol (`calls`, `inherits`,
+    /// `contains`, ...).
+    pub edge_type: EdgeType,
+    /// The neighbour on the other end of the edge.
+    pub symbol: SymbolOutline,
+    /// `true` when the neighbour is the edge *source* (an inbound relationship:
+    /// a caller, usage, or implementor).
+    pub incoming: bool,
+}
+
+/// A budgeted, single-symbol context bundle assembled for an agent.
+///
+/// This is the "what do I need to know about this symbol" payload: its own
+/// source plus the connected symbols that use it (callers) and that it uses
+/// (callees), capped so it cannot balloon past the caller's token budget.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolContext {
+    pub symbol: SymbolOutline,
+    pub file_path: String,
+    pub language: String,
+    /// The symbol's own source, sliced from its file.
+    pub source: String,
+    /// Inbound relationships: callers, usages, implementors.
+    pub callers: Vec<RelatedSymbol>,
+    /// Outbound relationships: callees, supertypes, imported nodes.
+    pub callees: Vec<RelatedSymbol>,
+    /// `true` when `callers` or `callees` was cut off by the budget.
+    pub truncated: bool,
+}
+
 /// A record in the conversation-memory delta log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMemory {
