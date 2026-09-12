@@ -1131,6 +1131,95 @@ impl ServerHandler for EnhancedContextMcpServer {
                             ],
                             example_use: "Create, update, or delete multiple entities in one operation".to_string(),
                         },
+                        // Code Graph (structural memory)
+                        ToolInfo {
+                            name: "index_project".to_string(),
+                            description: "Index a codebase directory into graph memory (incremental)".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                                "root_path".to_string(),
+                            ],
+                            example_use: "Parse Java/Go/Dart sources into a symbol graph; re-runs only re-parse changed files".to_string(),
+                        },
+                        ToolInfo {
+                            name: "search_symbols".to_string(),
+                            description: "Search the indexed symbol graph by name".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                                "query".to_string(),
+                            ],
+                            example_use: "Find symbols by name without reading any files".to_string(),
+                        },
+                        ToolInfo {
+                            name: "get_file_outline".to_string(),
+                            description: "Token-efficient structural outline of one indexed file".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                                "file_path".to_string(),
+                            ],
+                            example_use: "See a file's symbols, signatures and line ranges without reading the file".to_string(),
+                        },
+                        ToolInfo {
+                            name: "get_symbol_source".to_string(),
+                            description: "Exact source of one symbol, sliced by line range".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                                "symbol_id".to_string(),
+                            ],
+                            example_use: "Read one function or method instead of a whole file".to_string(),
+                        },
+                        ToolInfo {
+                            name: "get_symbol_context".to_string(),
+                            description: "Budgeted context bundle: a symbol plus its callers and callees".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                                "symbol_id".to_string(),
+                            ],
+                            example_use: "See how a symbol is used and what it uses without reading files".to_string(),
+                        },
+                        ToolInfo {
+                            name: "traverse_graph".to_string(),
+                            description: "Budgeted breadth-first traversal of the symbol graph".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                                "start_symbol_id".to_string(),
+                            ],
+                            example_use: "Pull a connected fragment of the codebase from a starting symbol".to_string(),
+                        },
+                        ToolInfo {
+                            name: "semantic_search".to_string(),
+                            description: "Cosine-similarity search over embedded context".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                                "query".to_string(),
+                            ],
+                            example_use: "Find semantically related code with a natural-language query".to_string(),
+                        },
+                        ToolInfo {
+                            name: "get_graph_stats".to_string(),
+                            description: "Symbol and edge counts for an indexed project".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "project_id".to_string(),
+                            ],
+                            example_use: "Check how much of a project has been indexed".to_string(),
+                        },
+                        ToolInfo {
+                            name: "get_conversation_deltas".to_string(),
+                            description: "Conversation-memory delta log for a session".to_string(),
+                            category: "Code Graph".to_string(),
+                            required_params: vec![
+                                "session_id".to_string(),
+                            ],
+                            example_use: "See what an agent explored (index/traverse/context events) in a session".to_string(),
+                        },
                         // Server Management
                         ToolInfo {
                             name: "get_server_capabilities".to_string(),
