@@ -63,7 +63,7 @@ impl ServerHandler for EnhancedContextMcpServer {
 
         let tools = vec![
             // Core Context Query Tool
-            Tool::new("query_context", "Assemble the context needed for a development task: curated project metadata (business rules, architectural decisions, performance requirements) plus a token-budgeted bundle of the actual code. Code is retrieved by semantic search over the indexed project, expanded one hop through the call/inheritance graph, ranked by relevance and graph distance, and cut at token_budget. Prefer this over reading files: it returns the relevant symbols' source instead of whole files.", Arc::new(serde_json::json!({
+            Tool::new("query_context", "Assemble the context needed for a development task: curated project metadata (business rules, architectural decisions, performance requirements) plus a token-budgeted bundle of the actual code. Code is retrieved by semantic search over the indexed project, expanded one hop through the call/inheritance graph, ranked by relevance and graph distance, and cut at token_budget. Prefer this over reading files: it returns the relevant symbols' source instead of whole files. Each item's source is verified against the revision its file was indexed at: if the file has changed since, the item reports \"freshness\": \"stale\" and carries the source captured at index time rather than a slice of the changed file, so re-index before trusting stale entries.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -391,7 +391,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                     },
                     "required": ["project_id", "file_path"]
                 }).as_object().unwrap().clone())),
-            Tool::new("get_symbol_source", "Return the exact source of a single symbol, sliced from its file by the symbol's line range. Pass an id from get_file_outline or search_symbols. This reads one function/method instead of a whole file, which is the main way to keep context small.", Arc::new(serde_json::json!({
+            Tool::new("get_symbol_source", "Return the exact source of a single symbol, sliced from its file by the symbol's line range. Pass an id from get_file_outline or search_symbols. This reads one function/method instead of a whole file, which is the main way to keep context small. The source is verified against the revision the file was indexed at; if the file has changed since, \"freshness\" reports \"stale\" (or \"unreadable\"/\"unverified\") and the body captured at index time is returned instead of a misaligned slice of the live file.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},

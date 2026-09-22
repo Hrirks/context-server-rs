@@ -1,4 +1,6 @@
-use crate::models::graph::{ConversationMemory, GraphEdge, GraphStats, GraphSymbol};
+use crate::models::graph::{
+    ConversationMemory, GraphEdge, GraphStats, GraphSymbol, IndexedFileState,
+};
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
 
@@ -55,6 +57,28 @@ pub trait GraphRepository: Send + Sync {
         project_id: &str,
         file_path: &str,
     ) -> Result<Vec<String>, McpError>;
+
+    /// Record the revision one file was parsed at.
+    ///
+    /// Retrieval compares a freshly computed hash against this, which is what
+    /// makes a stale line range detectable instead of silently wrong.
+    async fn upsert_indexed_file(&self, state: &IndexedFileState) -> Result<(), McpError>;
+
+    /// The recorded revision for one file, if it has been indexed.
+    async fn indexed_file_state(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<Option<IndexedFileState>, McpError>;
+
+    /// Every recorded file revision for a project.
+    async fn list_indexed_file_states(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<IndexedFileState>, McpError>;
+
+    /// Forget one file's recorded revision, used when the file is deleted.
+    async fn delete_indexed_file(&self, project_id: &str, file_path: &str) -> Result<(), McpError>;
 
     /// Count symbols and edges for a project.
     async fn stats(&self, project_id: &str) -> Result<GraphStats, McpError>;

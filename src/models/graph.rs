@@ -116,6 +116,10 @@ pub struct IndexReport {
     pub embedded: usize,
     /// Number of symbols that failed to embed (backend down, empty text, etc.).
     pub embed_failures: usize,
+    /// `true` when source discovery hit its file cap, so this index covers only
+    /// part of the tree. Surfaced rather than silent: a partial index that looks
+    /// complete is the failure mode this flag exists to prevent.
+    pub discovery_truncated: bool,
 }
 
 /// A compact, body-free view of a single symbol.
@@ -157,8 +161,18 @@ pub struct SymbolSource {
     pub signature: String,
     pub start_line: usize,
     pub end_line: usize,
-    /// The symbol's source, sliced from its file by line range.
+    /// The symbol's source: a verified slice of the file, or the body captured
+    /// at index time when the file can no longer be trusted to match.
     pub source: String,
+    /// How `source` was obtained. Omitted when the file verified as unchanged.
+    #[serde(skip_serializing_if = "SourceFreshness::is_fresh")]
+    pub freshness: SourceFreshness,
+    /// Content hash recorded at index time, when one is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_hash: Option<String>,
+    /// Content hash observed just now, when the file could be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_hash: Option<String>,
 }
 
 /// A file currently present in a project's index.
@@ -168,6 +182,56 @@ pub struct IndexedFile {
     pub language: String,
     /// Symbols parsed from this file (the file/package/import nodes excluded).
     pub symbol_count: usize,
+}
+
+/// How well a returned fragment's source is known to match its metadata.
+///
+/// Retrieval stores symbol line ranges, but serves source by slicing the file as
+/// it is *now*. Without a check, an edit between indexing and retrieval returns
+/// lines that no longer belong to the symbol, labelled with the symbol's
+/// index-time name and signature. Every fragment therefore reports how its
+/// source was obtained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceFreshness {
+    /// The file's current content hash matches the hash recorded at index time,
+    /// so the stored line range still addresses the symbol.
+    Fresh,
+    /// The file changed since indexing. The source returned is the body captured
+    /// at index time, not a slice of the changed file.
+    Stale,
+    /// No content hash was ever recorded for this file (an index predating
+    /// revision tracking). The body captured at index time is returned.
+    Unverified,
+    /// The file could not be read at all (moved, deleted, permissions). The body
+    /// captured at index time is returned.
+    Unreadable,
+}
+
+impl SourceFreshness {
+    /// Only a verified match is worth omitting from a payload.
+    pub fn is_fresh(&self) -> bool {
+        matches!(self, SourceFreshness::Fresh)
+    }
+}
+
+/// The revision of one file as recorded when it was last indexed.
+///
+/// This is what makes a stale read detectable: retrieval re-hashes the file on
+/// disk and compares against `content_hash`, instead of trusting stored line
+/// ranges against a file that has since moved on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexedFileState {
+    pub project_id: String,
+    pub file_path: String,
+    /// Content hash of the file body at the moment it was parsed.
+    pub content_hash: String,
+    /// Commit the file was indexed at, when the root is inside a git work tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_rev: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub mtime_ns: Option<i64>,
+    pub indexed_at: String,
 }
 
 /// One edge of a [`SymbolContext`]: the neighbour on the other end, plus the
@@ -194,8 +258,12 @@ pub struct SymbolContext {
     pub symbol: SymbolOutline,
     pub file_path: String,
     pub language: String,
-    /// The symbol's own source, sliced from its file.
+    /// The symbol's own source: a verified slice, or the body captured at
+    /// index time when the file has changed.
     pub source: String,
+    /// How `source` was obtained. Omitted when the file verified as unchanged.
+    #[serde(skip_serializing_if = "SourceFreshness::is_fresh")]
+    pub freshness: SourceFreshness,
     /// Inbound relationships: callers, usages, implementors.
     pub callers: Vec<RelatedSymbol>,
     /// Outbound relationships: callees, supertypes, imported nodes.
@@ -235,6 +303,9 @@ pub struct CodeContextItem {
     pub source: String,
     /// Estimated tokens for `source` plus this item's metadata.
     pub token_estimate: usize,
+    /// How `source` was obtained. Omitted when the file verified as unchanged.
+    #[serde(skip_serializing_if = "SourceFreshness::is_fresh")]
+    pub freshness: SourceFreshness,
 }
 
 /// A token-budgeted bundle of code assembled for a natural-language query.
