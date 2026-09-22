@@ -24,6 +24,12 @@ pub trait ProjectService: Send + Sync {
     /// succeed. Idempotent, so it is safe to call before every such operation.
     async fn ensure_project(&self, id: &str) -> Result<(), McpError>;
     async fn list_projects(&self) -> Result<Vec<Project>, McpError>;
+    /// Record the directory this project may index, replacing any previous root.
+    ///
+    /// Takes an already-canonicalised path. Resolution belongs to `root_guard`,
+    /// and storing a path that was never resolved would let a symlink decide
+    /// containment later on.
+    async fn register_root(&self, id: &str, canonical_root: &str) -> Result<Project, McpError>;
     #[allow(dead_code)]
     async fn update_project(&self, project: &Project) -> Result<Project, McpError>;
     #[allow(dead_code)]
@@ -59,6 +65,8 @@ impl<R: ProjectRepository> ProjectService for ProjectServiceImpl<R> {
             repository_url: repository_url.map(|s| s.to_string()),
             created_at: Some(now.clone()),
             updated_at: Some(now),
+            // A fresh project trusts nothing until a root is registered.
+            allowed_root: None,
         };
 
         self.repository.create(&project).await
@@ -80,6 +88,9 @@ impl<R: ProjectRepository> ProjectService for ProjectServiceImpl<R> {
             repository_url: None,
             created_at: Some(now.clone()),
             updated_at: Some(now),
+            // Auto-registration creates the row, not trust: indexing still has to
+            // clear the root check.
+            allowed_root: None,
         };
         // `create` inserts; a concurrent caller may have won the race, in which
         // case the row already exists and that is exactly the desired state.
@@ -97,6 +108,18 @@ impl<R: ProjectRepository> ProjectService for ProjectServiceImpl<R> {
 
     async fn list_projects(&self) -> Result<Vec<Project>, McpError> {
         self.repository.find_all().await
+    }
+
+    async fn register_root(&self, id: &str, canonical_root: &str) -> Result<Project, McpError> {
+        let Some(mut project) = self.repository.find_by_id(id).await? else {
+            return Err(McpError::invalid_params(
+                format!("Unknown project '{id}': create the project before registering a root"),
+                None,
+            ));
+        };
+        project.allowed_root = Some(canonical_root.to_string());
+        project.updated_at = Some(chrono::Utc::now().to_rfc3339());
+        self.repository.update(&project).await
     }
 
     async fn update_project(&self, project: &Project) -> Result<Project, McpError> {

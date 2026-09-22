@@ -345,12 +345,20 @@ impl ServerHandler for EnhancedContextMcpServer {
                 }).as_object().unwrap().clone())),
 
             // Graph memory tools (Phase 5/6)
-            Tool::new("index_project", "Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports/calls/inherits/references edges), and best-effort embed symbol text for semantic search. Incremental: unchanged files are skipped (content-hash check), deleted files are pruned, and only changed files are re-parsed/re-embedded, so repeated calls are cheap. The result reports files_indexed (changed files re-indexed this run), files_skipped (unchanged files skipped), files_removed (previously-indexed files no longer on disk), plus symbols/edges indexed and embedding counts", Arc::new(serde_json::json!({
+            Tool::new("index_project", "Index a codebase directory into graph memory: parse sources, build a symbol graph (contains/imports/calls/inherits/references edges), and best-effort embed symbol text for semantic search. Incremental: unchanged files are skipped (content-hash check), deleted files are pruned, and only changed files are re-parsed/re-embedded, so repeated calls are cheap. The result reports files_indexed (changed files re-indexed this run), files_skipped (unchanged files skipped), files_removed (previously-indexed files no longer on disk), plus symbols/edges indexed and embedding counts. The path must resolve inside the project's registered root, so call register_root first; an unregistered path is refused rather than indexed", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to index"},
                         "root_path": {"type": "string", "description": "The directory containing the source to index"},
                         "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
+                    },
+                    "required": ["project_id", "root_path"]
+                }).as_object().unwrap().clone())),
+            Tool::new("register_root", "Register the directory a project is allowed to index. Required before index_project: the server refuses to index any path that does not resolve inside a registered root, so a misbehaving client cannot point it at arbitrary readable source. The path is canonicalised (symlinks resolved) before being stored, a filesystem root is refused as too broad, and the server's own storage directory can never be brought into scope.", Arc::new(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "description": "The ID of the project"},
+                        "root_path": {"type": "string", "description": "The directory to register as this project's index root"}
                     },
                     "required": ["project_id", "root_path"]
                 }).as_object().unwrap().clone())),
@@ -2201,6 +2209,20 @@ impl EnhancedContextMcpServer {
                             McpError::invalid_params("Missing required parameter: name", None)
                         })?;
 
+                        // Updating a project must not quietly clear its registered
+                        // index root: an unrelated edit would remove the trust
+                        // boundary. The existing value is carried over unless the
+                        // caller sets one explicitly.
+                        let allowed_root = match data.get("allowed_root").and_then(|v| v.as_str()) {
+                            Some(root) => Some(root.to_string()),
+                            None => self
+                                .container
+                                .project_service
+                                .get_project(id)
+                                .await?
+                                .and_then(|project| project.allowed_root),
+                        };
+
                         let project = Project {
                             id: id.to_string(),
                             name: name.to_string(),
@@ -2214,6 +2236,7 @@ impl EnhancedContextMcpServer {
                                 .map(|s| s.to_string()),
                             created_at: None,
                             updated_at: None,
+                            allowed_root,
                         };
 
                         let updated_project = self
@@ -3057,6 +3080,48 @@ impl EnhancedContextMcpServer {
             }
 
             // Graph memory tools (Phase 5/6)
+            "register_root" => {
+                let args = request.arguments.unwrap_or_default();
+                let project_id =
+                    args.get("project_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: project_id", None)
+                        })?;
+                let root_path =
+                    args.get("root_path")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            McpError::invalid_params("Missing required parameter: root_path", None)
+                        })?;
+
+                // The row has to exist before a root can hang off it, and a root
+                // may legitimately be registered before the first index.
+                self.container
+                    .project_service
+                    .ensure_project(project_id)
+                    .await?;
+
+                let storage = crate::services::root_guard::default_storage_dir();
+                let canonical = crate::services::root_guard::canonical_registration_root(
+                    root_path,
+                    storage.as_deref(),
+                )
+                .map_err(|rejection| McpError::invalid_params(rejection.to_string(), None))?;
+
+                let project = self
+                    .container
+                    .project_service
+                    .register_root(project_id, &canonical.display().to_string())
+                    .await?;
+
+                let content = serde_json::to_string_pretty(&serde_json::json!({
+                    "project_id": project.id,
+                    "allowed_root": project.allowed_root,
+                }))
+                .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))?;
+                Ok(CallToolResult::success(vec![ContentBlock::text(content)]))
+            }
             "index_project" => {
                 let args = request.arguments.unwrap_or_default();
                 let project_id =
@@ -3084,10 +3149,27 @@ impl EnhancedContextMcpServer {
                     .ensure_project(project_id)
                     .await?;
 
+                // Trust boundary: the project must have a registered root and the
+                // requested path must resolve inside it. Without this check the
+                // server reads whatever path a client names, anywhere the user can.
+                let registered = self
+                    .container
+                    .project_service
+                    .get_project(project_id)
+                    .await?
+                    .and_then(|project| project.allowed_root);
+                let storage = crate::services::root_guard::default_storage_dir();
+                let canonical = crate::services::root_guard::resolve_index_root(
+                    root_path,
+                    registered.as_deref(),
+                    storage.as_deref(),
+                )
+                .map_err(|rejection| McpError::invalid_params(rejection.to_string(), None))?;
+
                 let report = self
                     .container
                     .graph_memory_service
-                    .index_directory(project_id, std::path::Path::new(root_path), session_id)
+                    .index_directory(project_id, canonical.as_path(), session_id)
                     .await?;
                 let content = serde_json::to_string_pretty(&report).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)

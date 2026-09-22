@@ -10,6 +10,7 @@ pub mod embedding_store_service;
 pub mod framework_service;
 pub mod graph_memory_service;
 pub mod project_service;
+pub mod root_guard;
 pub mod specification_analytics_service;
 pub mod specification_import_service;
 pub mod specification_parser;

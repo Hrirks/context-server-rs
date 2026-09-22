@@ -19,10 +19,8 @@ use tracing_subscriber::{self, EnvFilter};
 
 /// Get the config directory path for the context server
 fn get_config_dir() -> Result<PathBuf> {
-    let home_dir =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-
-    let config_dir = home_dir.join("config").join("context-server-rs");
+    let config_dir = context_server_rs::services::root_guard::default_storage_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
 
     // Create the config directory if it doesn't exist
     if !config_dir.exists() {
