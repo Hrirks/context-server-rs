@@ -291,11 +291,12 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
         "created_at",
         "TEXT DEFAULT (datetime('now'))",
     ),
+    ("context_symbols", "is_test", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 /// Shape of the schema this build expects. Bump it whenever a table changes
 /// shape, so a database written by an older build can be recognised.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Schema version recorded in the database; 0 means it predates versioning.
 pub fn schema_version(conn: &Connection) -> Result<i64> {

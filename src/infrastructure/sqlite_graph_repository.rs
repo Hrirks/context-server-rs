@@ -1,5 +1,7 @@
 use crate::db::connection_pool::{ConnectionPool, PooledConnection};
-use crate::models::graph::{ConversationMemory, EdgeType, GraphEdge, GraphStats, GraphSymbol};
+use crate::models::graph::{
+    ConversationMemory, EdgeType, GraphEdge, GraphStats, GraphSymbol, IndexedFileState,
+};
 use crate::repositories::GraphRepository;
 use async_trait::async_trait;
 use rmcp::model::ErrorData as McpError;
@@ -39,6 +41,9 @@ impl SqliteGraphRepository {
                 start_line INTEGER NOT NULL,
                 end_line INTEGER NOT NULL,
                 text TEXT NOT NULL,
+                -- Test code is indexed too, but marked so retrieval can rank
+                -- production above it rather than being blind to it.
+                is_test INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
 
@@ -72,14 +77,45 @@ impl SqliteGraphRepository {
             );
 
             CREATE INDEX IF NOT EXISTS idx_conversation_session ON conversation_memory(session_id, created_at);
+
+            -- The revision each file was parsed at. Retrieval re-hashes the file
+            -- on disk and compares against this, because a stored line range is
+            -- only trustworthy against the revision it was recorded from.
+            CREATE TABLE IF NOT EXISTS indexed_files (
+                project_id TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                git_rev TEXT,
+                size_bytes INTEGER,
+                mtime_ns INTEGER,
+                indexed_at TEXT NOT NULL,
+                PRIMARY KEY (project_id, file_path)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_indexed_files_project ON indexed_files(project_id);
             "#,
         )
         .map_err(|e| McpError::internal_error(format!("Failed to create graph tables: {e}"), None))
     }
 }
 
-const SYMBOL_COLUMNS: &str =
-    "id, project_id, file_path, name, kind, language, signature, start_line, end_line, text, created_at";
+const SYMBOL_COLUMNS: &str = "id, project_id, file_path, name, kind, language, signature, \
+     start_line, end_line, text, created_at, is_test";
+
+const INDEXED_FILE_COLUMNS: &str =
+    "project_id, file_path, content_hash, git_rev, size_bytes, mtime_ns, indexed_at";
+
+fn row_to_indexed_file(row: &Row) -> rusqlite::Result<IndexedFileState> {
+    Ok(IndexedFileState {
+        project_id: row.get(0)?,
+        file_path: row.get(1)?,
+        content_hash: row.get(2)?,
+        git_rev: row.get(3)?,
+        size_bytes: row.get(4)?,
+        mtime_ns: row.get(5)?,
+        indexed_at: row.get(6)?,
+    })
+}
 
 fn row_to_symbol(row: &Row) -> rusqlite::Result<GraphSymbol> {
     Ok(GraphSymbol {
@@ -94,6 +130,7 @@ fn row_to_symbol(row: &Row) -> rusqlite::Result<GraphSymbol> {
         end_line: row.get::<_, i64>(8)? as usize,
         text: row.get(9)?,
         created_at: row.get(10)?,
+        is_test: row.get::<_, i64>(11)? != 0,
     })
 }
 
@@ -141,12 +178,13 @@ impl GraphRepository for SqliteGraphRepository {
             r#"
             INSERT INTO context_symbols (
                 id, project_id, file_path, name, kind, language, signature,
-                start_line, end_line, text, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                start_line, end_line, text, is_test, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 signature = excluded.signature,
                 text = excluded.text,
-                end_line = excluded.end_line
+                end_line = excluded.end_line,
+                is_test = excluded.is_test
             "#,
             params![
                 symbol.id,
@@ -159,6 +197,7 @@ impl GraphRepository for SqliteGraphRepository {
                 symbol.start_line as i64,
                 symbol.end_line as i64,
                 symbol.text,
+                symbol.is_test,
                 symbol.created_at,
             ],
         )
@@ -309,6 +348,9 @@ impl GraphRepository for SqliteGraphRepository {
                     file_path: row.get(0)?,
                     language: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     symbol_count: row.get::<_, i64>(2)? as usize,
+                    // Classification is the parser's job, not persistence's; the
+                    // service fills this in before returning to a caller.
+                    is_test: false,
                 })
             })
             .map_err(|e| McpError::internal_error(format!("Failed to query files: {e}"), None))?
@@ -335,6 +377,107 @@ impl GraphRepository for SqliteGraphRepository {
         )
         .map_err(|e| {
             McpError::internal_error(format!("Failed to delete project symbols: {e}"), None)
+        })?;
+        db.execute(
+            "DELETE FROM indexed_files WHERE project_id = ?1",
+            params![project_id],
+        )
+        .map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to delete project file revisions: {e}"),
+                None,
+            )
+        })?;
+
+        Ok(())
+    }
+
+    async fn upsert_indexed_file(&self, state: &IndexedFileState) -> Result<(), McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        db.execute(
+            "INSERT INTO indexed_files \
+                (project_id, file_path, content_hash, git_rev, size_bytes, mtime_ns, indexed_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(project_id, file_path) DO UPDATE SET \
+                content_hash = excluded.content_hash,
+                git_rev = excluded.git_rev,
+                size_bytes = excluded.size_bytes,
+                mtime_ns = excluded.mtime_ns,
+                indexed_at = excluded.indexed_at",
+            params![
+                state.project_id,
+                state.file_path,
+                state.content_hash,
+                state.git_rev,
+                state.size_bytes,
+                state.mtime_ns,
+                state.indexed_at,
+            ],
+        )
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to record file revision: {e}"), None)
+        })?;
+
+        Ok(())
+    }
+
+    async fn indexed_file_state(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<Option<IndexedFileState>, McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        let query = format!(
+            "SELECT {INDEXED_FILE_COLUMNS} FROM indexed_files \
+             WHERE project_id = ?1 AND file_path = ?2"
+        );
+        db.query_row(&query, params![project_id, file_path], row_to_indexed_file)
+            .optional()
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to read file revision: {e}"), None)
+            })
+    }
+
+    async fn list_indexed_file_states(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<IndexedFileState>, McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        let query =
+            format!("SELECT {INDEXED_FILE_COLUMNS} FROM indexed_files WHERE project_id = ?1");
+        let mut stmt = db.prepare(&query).map_err(|e| {
+            McpError::internal_error(format!("Failed to prepare file revision list: {e}"), None)
+        })?;
+
+        let states = stmt
+            .query_map(params![project_id], row_to_indexed_file)
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to list file revisions: {e}"), None)
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to read file revisions: {e}"), None)
+            })?;
+
+        Ok(states)
+    }
+
+    async fn delete_indexed_file(&self, project_id: &str, file_path: &str) -> Result<(), McpError> {
+        let conn = self.checkout()?;
+        let db = conn.lock().unwrap();
+
+        db.execute(
+            "DELETE FROM indexed_files WHERE project_id = ?1 AND file_path = ?2",
+            params![project_id, file_path],
+        )
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to delete file revision: {e}"), None)
         })?;
 
         Ok(())
@@ -543,6 +686,7 @@ mod tests {
             start_line: 1,
             end_line: 2,
             text: format!("fn {name}() {{}}"),
+            is_test: false,
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }
     }

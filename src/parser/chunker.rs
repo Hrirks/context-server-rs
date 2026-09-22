@@ -14,8 +14,9 @@ use tree_sitter::{Node, Parser};
 
 use super::languages::SourceLanguage;
 
-/// Directories that never contain first-party sources worth chunking.
-const SKIPPED_DIRECTORIES: [&str; 12] = [
+/// Directories that never contain first-party sources worth chunking: build
+/// output and dependency trees.
+const SKIPPED_DIRECTORIES: [&str; 9] = [
     ".git",
     "target",
     "node_modules",
@@ -25,13 +26,70 @@ const SKIPPED_DIRECTORIES: [&str; 12] = [
     ".dart_tool",
     ".idea",
     "vendor",
-    "test",
-    "tests",
-    "integration_test",
 ];
 
+/// Directory names that mark their contents as tests.
+///
+/// Indexed by default: a test is often the clearest statement of what a symbol
+/// is supposed to do, and excluding them made "what calls this?" answers
+/// systematically incomplete. They are marked rather than dropped so retrieval
+/// can rank production code above them.
+const TEST_DIRECTORIES: [&str; 3] = ["test", "tests", "integration_test"];
+
+/// What a walk should include.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiscoveryOptions {
+    /// Whether test directories are walked. On by default.
+    pub include_tests: bool,
+}
+
+impl Default for DiscoveryOptions {
+    fn default() -> Self {
+        Self {
+            include_tests: true,
+        }
+    }
+}
+
+/// Whether a path holds test code rather than production code.
+///
+/// Two cheap, deterministic signals: a test directory anywhere in the path, or a
+/// filename the ecosystem reserves for tests. Used for ranking, never for
+/// exclusion — a test that matches a query is still worth seeing.
+pub fn is_test_path(path: &str) -> bool {
+    let normalised = path.replace('\\', "/");
+    let in_test_directory = normalised
+        .split('/')
+        .any(|component| TEST_DIRECTORIES.contains(&component));
+    let file_name = normalised.rsplit('/').next().unwrap_or(&normalised);
+    in_test_directory || looks_like_test_file(file_name)
+}
+
+fn looks_like_test_file(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    if lower.ends_with("_test.go") || lower.ends_with("_test.dart") || lower.starts_with("test_") {
+        return true;
+    }
+    // Java's build tools name tests in CamelCase, so match case-sensitively:
+    // lowercase matching would call "contest.java" a test.
+    file_name.ends_with("Test.java")
+        || file_name.ends_with("Tests.java")
+        || file_name.ends_with("IT.java")
+}
+
 /// Guard against being pointed at an enormous tree by accident.
-const MAX_DISCOVERED_FILES: usize = 5_000;
+///
+/// Hitting this cap truncates the index, so discovery reports it instead of
+/// returning a partial file list that looks complete.
+pub const MAX_DISCOVERED_FILES: usize = 5_000;
+
+/// What discovery found, and whether the walk stopped early.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Discovery {
+    pub files: Vec<PathBuf>,
+    /// `true` when the walk stopped at the file cap, so `files` is partial.
+    pub truncated: bool,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -191,11 +249,32 @@ pub async fn chunk_file_async(path: PathBuf) -> Result<Vec<SemanticChunk>, Parse
 /// Skips build output, dependency trees, and test directories. Discovery is
 /// plain filesystem work and is cheap enough to run inline.
 pub fn discover_sources(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
+    Ok(discover_with_limit(root, MAX_DISCOVERED_FILES)?.files)
+}
+
+/// As [`discover_sources`], but reports whether the walk hit `max_files`.
+///
+/// The cap exists so an accidental index of a huge tree cannot run away. When it
+/// bites, the caller has to know: an index that silently covers part of a tree
+/// reports "everything is indexed" while missing code.
+pub fn discover_with_limit(root: &Path, max_files: usize) -> Result<Discovery, ParseError> {
+    discover_with_options(root, max_files, DiscoveryOptions::default())
+}
+
+/// As [`discover_with_limit`], with control over what the walk includes.
+pub fn discover_with_options(
+    root: &Path,
+    max_files: usize,
+    options: DiscoveryOptions,
+) -> Result<Discovery, ParseError> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
+    let mut truncated = false;
 
     while let Some(directory) = stack.pop() {
-        if found.len() >= MAX_DISCOVERED_FILES {
+        if found.len() >= max_files {
+            // Reached only with directories still queued, so the walk is partial.
+            truncated = true;
             break;
         }
 
@@ -206,6 +285,11 @@ pub fn discover_sources(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
         };
 
         for entry in entries.flatten() {
+            if found.len() >= max_files {
+                // A single directory can hold more files than the cap allows.
+                truncated = true;
+                break;
+            }
             let path = entry.path();
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
@@ -215,7 +299,10 @@ pub fn discover_sources(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
             if file_type.is_dir() {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_ref()) {
+                let skipped = name.starts_with('.')
+                    || SKIPPED_DIRECTORIES.contains(&name.as_ref())
+                    || (!options.include_tests && TEST_DIRECTORIES.contains(&name.as_ref()));
+                if skipped {
                     continue;
                 }
                 stack.push(path);
@@ -226,7 +313,10 @@ pub fn discover_sources(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
     }
 
     found.sort();
-    Ok(found)
+    Ok(Discovery {
+        files: found,
+        truncated,
+    })
 }
 
 /// Discover and parse every supported source under a root, off the runtime.

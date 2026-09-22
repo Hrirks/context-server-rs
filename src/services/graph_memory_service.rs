@@ -18,11 +18,12 @@ use rmcp::model::ErrorData as McpError;
 use crate::models::embedding::content_hash;
 use crate::models::graph::{
     CodeContext, CodeContextItem, ContextOrigin, ConversationMemory, EdgeType, GraphEdge,
-    GraphStats, GraphSubgraph, GraphSymbol, IndexReport, IndexedFile, RelatedSymbol, SymbolContext,
-    SymbolOutline, SymbolSource,
+    GraphStats, GraphSubgraph, GraphSymbol, IndexReport, IndexedFile, IndexedFileState,
+    RelatedSymbol, SourceFreshness, SymbolContext, SymbolOutline, SymbolSource,
 };
 use crate::parser::{
-    chunk_file_async, discover_sources, ChunkKind, ReferenceKind, SemanticChunk, SourceLanguage,
+    chunk_file_async, discover_with_options, is_test_path, ChunkKind, DiscoveryOptions,
+    ReferenceKind, SemanticChunk, SourceLanguage, MAX_DISCOVERED_FILES,
 };
 use crate::repositories::GraphRepository;
 use crate::services::EmbeddingStoreService;
@@ -38,6 +39,14 @@ const CONTEXT_SEED_LIMIT: usize = 8;
 const CONTEXT_SEED_OVERFETCH: usize = 8;
 /// Score multiplier applied per graph hop away from a seed.
 const CONTEXT_DISTANCE_DECAY: f32 = 0.5;
+/// Score multiplier for declarations that live in test code.
+///
+/// Tests are worth retrieving — a test is often the clearest statement of what a
+/// symbol must do — but a test that happens to match a query must not outrank the
+/// production symbol it exercises. Dropping tests from the index made "what calls
+/// this?" answers incomplete; ranking them lower gets the same protection without
+/// the blind spot.
+const CONTEXT_TEST_PENALTY: f32 = 0.5;
 /// Hard cap on bundle size, independent of the token budget.
 const CONTEXT_MAX_ITEMS: usize = 64;
 /// Rough per-item cost of the outline metadata, in tokens.
@@ -88,15 +97,28 @@ impl GraphMemoryService {
     /// Edges pointing *into* a re-indexed file from files that were not
     /// re-parsed are carried across the rewrite and restored when the
     /// declaration they targeted still exists (see [`IndexReport::edges_reconnected`]).
+    /// `options` controls what the walk includes. Test directories are indexed by
+    /// default and marked as test code; a caller can exclude them for a narrow run.
     pub async fn index_directory(
         &self,
         project_id: &str,
         root: &Path,
         session_id: &str,
+        options: DiscoveryOptions,
     ) -> Result<IndexReport, McpError> {
-        let files = discover_sources(root).map_err(|e| {
-            McpError::internal_error(format!("Failed to discover sources: {e}"), None)
-        })?;
+        let discovery =
+            discover_with_options(root, MAX_DISCOVERED_FILES, options).map_err(|e| {
+                McpError::internal_error(format!("Failed to discover sources: {e}"), None)
+            })?;
+        let files = discovery.files;
+        if discovery.truncated {
+            // Never let a partial index present itself as complete.
+            tracing::warn!(
+                project_id,
+                cap = MAX_DISCOVERED_FILES,
+                "source discovery hit the file cap: this index covers only part of the tree"
+            );
+        }
 
         // Stable content hash per discovered file. `None` means the file could
         // not be read; it is treated as changed so the parse path surfaces the
@@ -111,14 +133,29 @@ impl GraphMemoryService {
             file_hashes.insert(path, hash);
         }
 
-        // Existing file-level state: file symbols carry their last content hash
-        // in `text`, so changed/unchanged is decidable without re-parsing.
+        // Provenance for everything recorded this run. Best-effort: a root that
+        // is not a git work tree simply records no revision.
+        let git_rev = git_revision(root).await;
+
+        // Existing revision state, so changed/unchanged is decidable without
+        // re-parsing. An index written before revision tracking kept the hash in
+        // the synthetic file symbol's `text`; read that as a fallback so an
+        // upgrade does not silently force a full re-index.
         let existing = self.repository.list_symbols(project_id).await?;
-        let prev_file_hash: HashMap<String, String> = existing
-            .iter()
-            .filter(|s| s.kind == "file")
-            .map(|s| (s.file_path.clone(), s.text.clone()))
+        let mut prev_file_hash: HashMap<String, String> = self
+            .repository
+            .list_indexed_file_states(project_id)
+            .await?
+            .into_iter()
+            .map(|state| (state.file_path, state.content_hash))
             .collect();
+        for symbol in existing.iter().filter(|s| s.kind == "file") {
+            if !symbol.text.is_empty() {
+                prev_file_hash
+                    .entry(symbol.file_path.clone())
+                    .or_insert_with(|| symbol.text.clone());
+            }
+        }
 
         let current_paths: HashSet<String> =
             files.iter().map(|f| f.display().to_string()).collect();
@@ -143,6 +180,32 @@ impl GraphMemoryService {
             } else {
                 changed_files.push(file.clone());
             }
+        }
+
+        // Backfill revision rows for unchanged files on a database that predates
+        // revision tracking, so their reads verify against a recorded hash rather
+        // than reporting unverified until something happens to edit them.
+        for path in unchanged_paths.iter() {
+            if self
+                .repository
+                .indexed_file_state(project_id, path)
+                .await?
+                .is_some()
+            {
+                continue;
+            }
+            let Some(hash) = prev_file_hash.get(path).cloned() else {
+                continue;
+            };
+            let state = indexed_file_state(
+                project_id,
+                path,
+                hash,
+                git_rev.clone(),
+                Path::new(path),
+                chrono::Utc::now().to_rfc3339(),
+            );
+            self.repository.upsert_indexed_file(&state).await?;
         }
 
         let mut deleted_paths: Vec<String> = Vec::new();
@@ -179,6 +242,9 @@ impl GraphMemoryService {
                 .delete_symbols_for_file(project_id, path)
                 .await?;
             self.delete_embeddings(&removed).await;
+            self.repository
+                .delete_indexed_file(project_id, path)
+                .await?;
             files_removed += 1;
         }
         for file in &changed_files {
@@ -233,6 +299,7 @@ impl GraphMemoryService {
         let mut new_symbol_ids: HashMap<(String, String, String), Vec<String>> = HashMap::new();
         let mut embedded = 0usize;
         let mut embed_failures = 0usize;
+        let mut indexed_tests = 0usize;
 
         // References whose target id cannot be resolved until the whole project
         // has been indexed (a call may target a symbol defined in another file).
@@ -245,6 +312,12 @@ impl GraphMemoryService {
             let file_path = file.display().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             let file_id = symbol_id(project_id, &file_path, &file_path, "file", 0);
+            // Classified once per file: every declaration in a test file is test
+            // code, and the file node itself is what makes the counts add up.
+            let file_is_test = is_test_path(&file_path);
+            if file_is_test {
+                indexed_tests += 1;
+            }
 
             let file_symbol = GraphSymbol {
                 id: file_id.clone(),
@@ -256,10 +329,11 @@ impl GraphMemoryService {
                 signature: file_path.clone(),
                 start_line: 1,
                 end_line: 1,
-                text: file_hashes
-                    .get(&file_path)
-                    .and_then(|h| h.clone())
-                    .unwrap_or_default(),
+                // The revision lives in `indexed_files`, not in this column: a
+                // file node carrying a hash as its source is how a stale read went
+                // unnoticed. Left empty so nothing can mistake it for source.
+                text: String::new(),
+                is_test: file_is_test,
                 created_at: now.clone(),
             };
             self.repository.upsert_symbol(&file_symbol).await?;
@@ -268,6 +342,21 @@ impl GraphMemoryService {
             let chunks = chunk_file_async(file.clone()).await.map_err(|e| {
                 McpError::internal_error(format!("Failed to parse {file_path}: {e}"), None)
             })?;
+
+            // Record the revision only now that the file has parsed: a hash
+            // written for a file whose symbols failed to index would make the
+            // next run skip it as unchanged.
+            if let Some(hash) = file_hashes.get(&file_path).and_then(|h| h.clone()) {
+                let state = indexed_file_state(
+                    project_id,
+                    &file_path,
+                    hash,
+                    git_rev.clone(),
+                    file,
+                    now.clone(),
+                );
+                self.repository.upsert_indexed_file(&state).await?;
+            }
 
             // Build symbol nodes in chunk order, remembering their ids so the
             // `parent` index can be resolved into graph edges below.
@@ -288,6 +377,7 @@ impl GraphMemoryService {
                     start_line: chunk.start_line,
                     end_line: chunk.end_line,
                     text: chunk.text.clone(),
+                    is_test: file_is_test,
                     created_at: now.clone(),
                 };
                 self.repository.upsert_symbol(&symbol).await?;
@@ -489,6 +579,8 @@ impl GraphMemoryService {
         Ok(IndexReport {
             project_id: project_id.to_string(),
             files_indexed: changed_files.len(),
+            files_indexed_production: changed_files.len().saturating_sub(indexed_tests),
+            files_indexed_tests: indexed_tests,
             files_skipped,
             files_removed,
             symbols_indexed,
@@ -496,6 +588,7 @@ impl GraphMemoryService {
             edges_reconnected,
             embedded,
             embed_failures,
+            discovery_truncated: discovery.truncated,
         })
     }
 
@@ -521,10 +614,8 @@ impl GraphMemoryService {
             return Ok(None);
         }
 
-        let source = match tokio::fs::read_to_string(&symbol.file_path).await {
-            Ok(content) => slice_lines(&content, symbol.start_line, symbol.end_line),
-            Err(_) => symbol.text.clone(),
-        };
+        let mut cache = SourceCache::default();
+        let verified = self.verified_source(project_id, &symbol, &mut cache).await;
 
         let incoming_edges = self.repository.find_incoming_edges(symbol_id).await?;
         let outgoing_edges = self.repository.find_outgoing_edges(symbol_id).await?;
@@ -602,7 +693,8 @@ impl GraphMemoryService {
             symbol: SymbolOutline::from(&symbol),
             file_path: symbol.file_path,
             language: symbol.language,
-            source,
+            source: verified.source,
+            freshness: verified.freshness,
             callers,
             callees,
             truncated,
@@ -652,7 +744,11 @@ impl GraphMemoryService {
                         if symbol.project_id != project_id || !kind_indexable(&symbol.kind) {
                             continue;
                         }
-                        resolved.push((symbol, hit.similarity.max(0.0), Some(hit.similarity)));
+                        let mut score = hit.similarity.max(0.0);
+                        if symbol.is_test {
+                            score *= CONTEXT_TEST_PENALTY;
+                        }
+                        resolved.push((symbol, score, Some(hit.similarity)));
                     }
                     if !resolved.is_empty() {
                         semantic = true;
@@ -673,7 +769,12 @@ impl GraphMemoryService {
                 .await?
             {
                 if kind_indexable(&symbol.kind) {
-                    seeds.push((symbol, 1.0, None));
+                    let score = if symbol.is_test {
+                        CONTEXT_TEST_PENALTY
+                    } else {
+                        1.0
+                    };
+                    seeds.push((symbol, score, None));
                 }
             }
         }
@@ -740,10 +841,12 @@ impl GraphMemoryService {
         let mut items: Vec<CodeContextItem> = Vec::new();
         let mut tokens_used = 0usize;
         let mut truncated = false;
-        let mut source_cache: HashMap<String, Option<String>> = HashMap::new();
+        let mut source_cache = SourceCache::default();
 
         for (symbol, score, similarity) in &seeds {
-            let source = self.source_for_symbol(symbol, &mut source_cache).await;
+            let verified = self
+                .verified_source(project_id, symbol, &mut source_cache)
+                .await;
             let mut item = CodeContextItem {
                 symbol: SymbolOutline::from(symbol),
                 file_path: symbol.file_path.clone(),
@@ -753,8 +856,9 @@ impl GraphMemoryService {
                 distance: 0,
                 score: *score,
                 via: None,
-                source,
+                source: verified.source,
                 token_estimate: 0,
+                freshness: verified.freshness,
             };
             let cost = item_cost(&item);
             if items.len() >= CONTEXT_MAX_ITEMS || tokens_used + cost > token_budget {
@@ -767,7 +871,9 @@ impl GraphMemoryService {
         }
 
         for (score, edge_type, symbol) in &ranked_neighbours {
-            let source = self.source_for_symbol(symbol, &mut source_cache).await;
+            let verified = self
+                .verified_source(project_id, symbol, &mut source_cache)
+                .await;
             let mut item = CodeContextItem {
                 symbol: SymbolOutline::from(symbol),
                 file_path: symbol.file_path.clone(),
@@ -777,8 +883,9 @@ impl GraphMemoryService {
                 distance: 1,
                 score: *score,
                 via: Some(*edge_type),
-                source,
+                source: verified.source,
                 token_estimate: 0,
+                freshness: verified.freshness,
             };
             let cost = item_cost(&item);
             if items.len() >= CONTEXT_MAX_ITEMS || tokens_used + cost > token_budget {
@@ -818,24 +925,69 @@ impl GraphMemoryService {
         })
     }
 
-    /// Read one symbol's source lines, caching whole files across a bundle so
-    /// a file is read once even when several of its symbols are included.
-    async fn source_for_symbol(
+    /// Read one symbol's source, verifying the file against the revision that was
+    /// indexed before trusting the symbol's stored line range.
+    ///
+    /// This is the guard that makes a stale read visible. Slicing a stored line
+    /// range out of a file that has since changed returns lines belonging to some
+    /// other declaration, still labelled with this symbol's name and signature —
+    /// which reads as authoritative and is worse than returning nothing. When the
+    /// file cannot be verified, the body captured at index time is returned and
+    /// [`SourceFreshness`] says why.
+    ///
+    /// Files are read and hashed once per call, so a bundle containing several
+    /// symbols from one file still touches that file once.
+    async fn verified_source(
         &self,
+        project_id: &str,
         symbol: &GraphSymbol,
-        cache: &mut HashMap<String, Option<String>>,
-    ) -> String {
-        let content = match cache.get(&symbol.file_path).cloned() {
-            Some(cached) => cached,
-            None => {
-                let read = tokio::fs::read_to_string(&symbol.file_path).await.ok();
-                cache.insert(symbol.file_path.clone(), read.clone());
-                read
-            }
-        };
-        match content {
-            Some(text) => slice_lines(&text, symbol.start_line, symbol.end_line),
-            None => symbol.text.clone(),
+        cache: &mut SourceCache,
+    ) -> VerifiedSource {
+        if !cache.state.contains_key(&symbol.file_path) {
+            let content = tokio::fs::read_to_string(&symbol.file_path).await.ok();
+            let recorded = self
+                .repository
+                .indexed_file_state(project_id, &symbol.file_path)
+                .await
+                .ok()
+                .flatten();
+            let observed_hash = content.as_deref().map(content_hash);
+            let indexed_hash = recorded.as_ref().map(|state| state.content_hash.clone());
+            let freshness = match (&content, &observed_hash, &indexed_hash) {
+                (None, _, _) => SourceFreshness::Unreadable,
+                (Some(_), Some(observed), Some(indexed)) if observed == indexed => {
+                    SourceFreshness::Fresh
+                }
+                (Some(_), _, Some(_)) => SourceFreshness::Stale,
+                (Some(_), _, None) => SourceFreshness::Unverified,
+            };
+            cache.state.insert(
+                symbol.file_path.clone(),
+                FileState {
+                    content,
+                    freshness,
+                    indexed_hash,
+                    observed_hash,
+                },
+            );
+        }
+
+        let state = cache
+            .state
+            .get(&symbol.file_path)
+            .expect("file state inserted above");
+        VerifiedSource {
+            source: match (&state.content, state.freshness) {
+                // Only a verified match justifies slicing the live file.
+                (Some(text), SourceFreshness::Fresh) => {
+                    slice_lines(text, symbol.start_line, symbol.end_line)
+                        .unwrap_or_else(|| symbol.text.clone())
+                }
+                _ => symbol.text.clone(),
+            },
+            freshness: state.freshness,
+            indexed_hash: state.indexed_hash.clone(),
+            observed_hash: state.observed_hash.clone(),
         }
     }
 
@@ -844,7 +996,12 @@ impl GraphMemoryService {
     /// The human-review surface for an index: answers "what did indexing
     /// actually pick up?" without walking the symbol graph.
     pub async fn indexed_files(&self, project_id: &str) -> Result<Vec<IndexedFile>, McpError> {
-        self.repository.list_indexed_files(project_id).await
+        let mut files = self.repository.list_indexed_files(project_id).await?;
+        // The classification rules live with the parser, not in persistence.
+        for file in &mut files {
+            file.is_test = is_test_path(&file.file_path);
+        }
+        Ok(files)
     }
 
     /// Token-efficient structural outline of one indexed file.
@@ -874,9 +1031,10 @@ impl GraphMemoryService {
 
     /// Exact source for a single symbol, sliced from its file by line range.
     ///
-    /// Line ranges are 1-based and inclusive. When the file can no longer be
-    /// read (moved, deleted, permissions) this falls back to the symbol text
-    /// captured at index time.
+    /// Line ranges are 1-based and inclusive. The slice is only served when the
+    /// file's current content still matches the revision that was indexed. If the
+    /// file changed since then, moved, or cannot be read, the body captured at
+    /// index time is returned instead and `freshness` says which case applied.
     pub async fn symbol_source(
         &self,
         project_id: &str,
@@ -889,10 +1047,8 @@ impl GraphMemoryService {
             return Ok(None);
         }
 
-        let source = match tokio::fs::read_to_string(&symbol.file_path).await {
-            Ok(content) => slice_lines(&content, symbol.start_line, symbol.end_line),
-            Err(_) => symbol.text.clone(),
-        };
+        let mut cache = SourceCache::default();
+        let verified = self.verified_source(project_id, &symbol, &mut cache).await;
 
         Ok(Some(SymbolSource {
             id: symbol.id,
@@ -903,7 +1059,10 @@ impl GraphMemoryService {
             signature: symbol.signature,
             start_line: symbol.start_line,
             end_line: symbol.end_line,
-            source,
+            source: verified.source,
+            freshness: verified.freshness,
+            indexed_hash: verified.indexed_hash,
+            observed_hash: verified.observed_hash,
         }))
     }
 
@@ -1280,16 +1439,90 @@ fn kind_indexable(kind: &str) -> bool {
 ///
 /// `start == 0` (or an otherwise unusable range) yields the whole source, which
 /// keeps the caller from returning an empty body for unset line numbers.
-fn slice_lines(source: &str, start_line: usize, end_line: usize) -> String {
-    if start_line == 0 || end_line < start_line {
-        return source.to_string();
+/// One file's read and verification outcome, cached across a bundle.
+struct FileState {
+    content: Option<String>,
+    freshness: SourceFreshness,
+    indexed_hash: Option<String>,
+    observed_hash: Option<String>,
+}
+
+/// Per-call cache of file states, keyed by path.
+#[derive(Default)]
+struct SourceCache {
+    state: HashMap<String, FileState>,
+}
+
+/// A symbol's source together with how it was obtained.
+struct VerifiedSource {
+    source: String,
+    freshness: SourceFreshness,
+    indexed_hash: Option<String>,
+    observed_hash: Option<String>,
+}
+
+/// The commit a work tree is at, when `root` is inside one.
+///
+/// Best-effort by design: a root outside git, or a git that is not installed,
+/// records no revision. The revision is provenance for a stale read, not a
+/// correctness dependency.
+async fn git_revision(root: &Path) -> Option<String> {
+    let output = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    source
-        .lines()
-        .skip(start_line - 1)
-        .take(end_line - start_line + 1)
-        .collect::<Vec<_>>()
-        .join("\n")
+    let rev = String::from_utf8(output.stdout).ok()?;
+    let rev = rev.trim().to_string();
+    (!rev.is_empty()).then_some(rev)
+}
+
+/// Build the revision record for one file, stat-ing it for size and mtime.
+fn indexed_file_state(
+    project_id: &str,
+    file_path: &str,
+    content_hash: String,
+    git_rev: Option<String>,
+    disk_path: &Path,
+    indexed_at: String,
+) -> IndexedFileState {
+    let metadata = std::fs::metadata(disk_path).ok();
+    let mtime_ns = metadata
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i64);
+    IndexedFileState {
+        project_id: project_id.to_string(),
+        file_path: file_path.to_string(),
+        content_hash,
+        git_rev,
+        size_bytes: metadata.as_ref().map(|m| m.len() as i64),
+        mtime_ns,
+        indexed_at,
+    }
+}
+
+/// Slice a 1-based inclusive line range out of `source`.
+///
+/// `None` means the range does not address this file, and the caller must fall
+/// back to the body captured at index time. Returning the whole file for a
+/// degenerate range — the previous behaviour — hands the caller something that
+/// looks like the symbol and is not.
+fn slice_lines(source: &str, start_line: usize, end_line: usize) -> Option<String> {
+    if start_line == 0 || end_line < start_line {
+        return None;
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    if end_line > lines.len() {
+        return None;
+    }
+    Some(lines[start_line - 1..end_line].join("\n"))
 }
 
 /// Estimated tokens for one item *as the caller receives it*.
@@ -1425,7 +1658,7 @@ mod tests {
 
         let service = build(false);
         let report = service
-            .index_directory("p1", dir.path(), "session-1")
+            .index_directory("p1", dir.path(), "session-1", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1436,6 +1669,350 @@ mod tests {
         let stats = service.stats("p1").await.unwrap();
         assert!(stats.symbol_count >= 4);
         assert!(stats.edge_count >= 2);
+    }
+
+    #[test]
+    fn slice_lines_refuses_a_range_that_does_not_address_the_file() {
+        let source = "a\nb\nc\n";
+
+        assert_eq!(slice_lines(source, 1, 2).as_deref(), Some("a\nb"));
+        assert_eq!(slice_lines(source, 2, 2).as_deref(), Some("b"));
+
+        // A degenerate range used to return the whole file: something that looks
+        // like the symbol and is not.
+        assert!(slice_lines(source, 0, 2).is_none());
+        assert!(slice_lines(source, 3, 2).is_none());
+
+        // A range running past the end means the file moved on under us.
+        assert!(slice_lines(source, 2, 9).is_none());
+    }
+
+    #[test]
+    fn discovery_reports_when_it_stops_at_the_file_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(dir.path(), "a.go", "package a\n");
+        write_source(dir.path(), "b.go", "package b\n");
+        write_source(dir.path(), "c.go", "package c\n");
+
+        let complete = crate::parser::chunker::discover_with_limit(dir.path(), 10).unwrap();
+        assert_eq!(complete.files.len(), 3);
+        assert!(!complete.truncated);
+
+        // The cap binds even when one directory holds more files than it allows,
+        // and the caller is told: a partial index must not look complete.
+        let capped = crate::parser::chunker::discover_with_limit(dir.path(), 2).unwrap();
+        assert_eq!(capped.files.len(), 2);
+        assert!(capped.truncated);
+    }
+
+    #[tokio::test]
+    async fn editing_a_file_marks_its_symbols_stale_instead_of_misaligned() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.go");
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc target() int {\n\treturn 1\n}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+
+        let target = service
+            .search_symbols("p1", "target", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == "target")
+            .expect("target indexed");
+        let indexed_body = target.text.clone();
+
+        // Unedited: the file verifies against the indexed revision, so the live
+        // slice is served.
+        let fresh = service
+            .symbol_source("p1", &target.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fresh.freshness, SourceFreshness::Fresh);
+        assert!(fresh.source.contains("func target"));
+
+        // Insert lines *above* the symbol, so its stored range now addresses
+        // different code. Slicing anyway would return a comment block labelled
+        // "target" — plausible-looking and wrong.
+        std::fs::write(
+            &file,
+            "package main\n\n// filler\n// filler\nfunc target() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+
+        let stale = service
+            .symbol_source("p1", &target.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stale.freshness, SourceFreshness::Stale);
+        assert_eq!(
+            stale.source, indexed_body,
+            "a stale read must serve the indexed body, never a misaligned slice"
+        );
+        assert!(!stale.source.contains("filler"));
+        assert_ne!(stale.indexed_hash, stale.observed_hash);
+        assert!(stale.indexed_hash.is_some() && stale.observed_hash.is_some());
+    }
+
+    #[tokio::test]
+    async fn reindexing_clears_the_stale_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.go");
+        let original = "package main\n\nfunc target() int {\n\treturn 1\n}\n";
+        write_source(dir.path(), "main.go", original);
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+        let target = service
+            .search_symbols("p1", "target", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == "target")
+            .unwrap();
+
+        let edited = "package main\n\nconst extra = 1\n\nfunc target() int {\n\treturn extra\n}\n";
+        std::fs::write(&file, edited).unwrap();
+        assert_eq!(
+            service
+                .symbol_source("p1", &target.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .freshness,
+            SourceFreshness::Stale
+        );
+
+        service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+        let target = service
+            .search_symbols("p1", "target", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == "target")
+            .unwrap();
+        let refreshed = service
+            .symbol_source("p1", &target.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(refreshed.freshness, SourceFreshness::Fresh);
+        assert!(refreshed.source.contains("return extra"));
+    }
+
+    #[tokio::test]
+    async fn a_vanished_file_reads_as_unreadable_from_the_index() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc target() int {\n\treturn 1\n}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+        let target = service
+            .search_symbols("p1", "target", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == "target")
+            .unwrap();
+
+        std::fs::remove_file(dir.path().join("main.go")).unwrap();
+
+        let result = service
+            .symbol_source("p1", &target.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.freshness, SourceFreshness::Unreadable);
+        assert!(result.source.contains("func target"));
+        assert!(result.observed_hash.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_tight_token_budget_still_reports_freshness_on_what_it_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc alpha() int {\n\treturn 1\n}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+
+        let bundle = service
+            .assemble_code_context("p1", "alpha", 4096, "s")
+            .await
+            .unwrap();
+        assert!(!bundle.items.is_empty());
+        for item in &bundle.items {
+            assert_eq!(item.freshness, SourceFreshness::Fresh);
+        }
+    }
+
+    #[test]
+    fn test_paths_are_classified_by_directory_and_by_filename() {
+        // Directory conventions.
+        assert!(is_test_path("/repo/tests/helper.go"));
+        assert!(is_test_path("app/integration_test/flow.dart"));
+
+        // Filename conventions, one per language this build parses.
+        assert!(is_test_path("/repo/pkg/main_test.go"));
+        assert!(is_test_path("/repo/lib/widget_test.dart"));
+        assert!(is_test_path("/repo/lib/test_widget.dart"));
+        assert!(is_test_path(
+            "/repo/src/main/java/com/x/UserServiceTest.java"
+        ));
+        assert!(is_test_path("/repo/src/main/java/com/x/UserServiceIT.java"));
+
+        // Production code, including names that merely contain "test".
+        assert!(!is_test_path("/repo/pkg/main.go"));
+        assert!(!is_test_path("/repo/src/contest.java"));
+        assert!(!is_test_path("/repo/libs/latest/thing.go"));
+    }
+
+    #[tokio::test]
+    async fn test_directories_are_indexed_and_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc target() int {\n\treturn 1\n}\n",
+        );
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            tests_dir.join("suite_test.go"),
+            "package tests\n\nfunc TestTarget() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+
+        let service = build(false);
+        let report = service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(report.files_indexed, 2);
+        assert_eq!(report.files_indexed_tests, 1);
+        assert_eq!(report.files_indexed_production, 1);
+
+        let files = service.indexed_files("p1").await.unwrap();
+        let test_file = files
+            .iter()
+            .find(|file| file.file_path.contains("tests/"))
+            .expect("a test directory must be indexed, not skipped");
+        assert!(test_file.is_test);
+        assert!(files.iter().any(|file| !file.is_test));
+    }
+
+    #[tokio::test]
+    async fn production_code_outranks_a_test_of_the_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc target() int {\n\treturn 1\n}\n",
+        );
+        // Same directory and the only difference is which one is production, so
+        // the ranking difference cannot come from anything but the test mark.
+        write_source(
+            dir.path(),
+            "main_test.go",
+            "package main\n\nfunc TestTarget() int {\n\treturn target()\n}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+
+        let bundle = service
+            .assemble_code_context("p1", "target", 4000, "s")
+            .await
+            .unwrap();
+        let names: Vec<&str> = bundle
+            .items
+            .iter()
+            .map(|item| item.symbol.name.as_str())
+            .collect();
+
+        // Tests are indexed rather than invisible...
+        assert!(
+            names.contains(&"TestTarget"),
+            "tests must be indexed: {names:?}"
+        );
+        assert!(
+            names.contains(&"target"),
+            "production must be indexed: {names:?}"
+        );
+        // ...but a test does not outrank the code it exercises.
+        assert_eq!(bundle.items[0].symbol.name, "target", "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn tests_can_still_be_excluded_for_a_narrow_run() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc target() int {\n\treturn 1\n}\n",
+        );
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            tests_dir.join("suite_test.go"),
+            "package tests\n\nfunc TestThing() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+
+        let service = build(false);
+        let report = service
+            .index_directory(
+                "p1",
+                dir.path(),
+                "s",
+                DiscoveryOptions {
+                    include_tests: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(report.files_indexed, 1);
+        assert_eq!(report.files_indexed_tests, 0);
+        assert!(service
+            .indexed_files("p1")
+            .await
+            .unwrap()
+            .iter()
+            .all(|file| !file.is_test));
     }
 
     #[tokio::test]
@@ -1449,7 +2026,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1474,7 +2051,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1515,7 +2092,7 @@ mod tests {
 
         let service = build(true);
         let report = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1541,7 +2118,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1567,7 +2144,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "sess")
+            .index_directory("p1", dir.path(), "sess", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1585,7 +2162,7 @@ mod tests {
         let service = build(false);
 
         let first = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         assert_eq!(first.files_indexed, 2);
@@ -1593,7 +2170,7 @@ mod tests {
         assert_eq!(first.files_removed, 0);
 
         let second = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         assert_eq!(second.files_indexed, 0);
@@ -1604,7 +2181,7 @@ mod tests {
         std::fs::remove_file(dir.path().join("b.go")).unwrap();
 
         let third = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         assert_eq!(third.files_indexed, 1);
@@ -1626,7 +2203,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1655,7 +2232,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1684,7 +2261,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1714,7 +2291,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1778,7 +2355,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1824,7 +2401,7 @@ mod tests {
 
         let service = build(true);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1860,7 +2437,7 @@ mod tests {
         // expected seeding order deterministic.
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1896,7 +2473,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1929,7 +2506,7 @@ mod tests {
 
         let service = build(true);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1990,7 +2567,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2050,7 +2627,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2090,7 +2667,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2130,7 +2707,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2151,7 +2728,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2231,7 +2808,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         let callee = function_named(&service, "callee").await;
@@ -2250,7 +2827,7 @@ mod tests {
             "package main\n\nfunc callee() {}\n\n// touched\n",
         );
         let report = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2295,7 +2872,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2307,7 +2884,7 @@ mod tests {
             "package main\n\nfunc renamed() {}\n",
         );
         let report = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 

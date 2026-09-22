@@ -63,7 +63,7 @@ impl ServerHandler for EnhancedContextMcpServer {
 
         let tools = vec![
             // Core Context Query Tool
-            Tool::new("query_context", "Assemble the context needed for a development task: curated project metadata (business rules, architectural decisions, performance requirements) plus a token-budgeted bundle of the actual code. Code is retrieved by semantic search over the indexed project, expanded one hop through the call/inheritance graph, ranked by relevance and graph distance, and cut at token_budget. Prefer this over reading files: it returns the relevant symbols' source instead of whole files.", Arc::new(serde_json::json!({
+            Tool::new("query_context", "Assemble the context needed for a development task: curated project metadata (business rules, architectural decisions, performance requirements) plus a token-budgeted bundle of the actual code. Code is retrieved by semantic search over the indexed project, expanded one hop through the call/inheritance graph, ranked by relevance and graph distance, and cut at token_budget. Prefer this over reading files: it returns the relevant symbols' source instead of whole files. Each item's source is verified against the revision its file was indexed at: if the file has changed since, the item reports \"freshness\": \"stale\" and carries the source captured at index time rather than a slice of the changed file, so re-index before trusting stale entries.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -350,6 +350,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to index"},
                         "root_path": {"type": "string", "description": "The directory containing the source to index"},
+                        "include_tests": {"type": "boolean", "description": "Whether to index test directories (test/, tests/, integration_test/). Defaults to true. Test symbols are marked either way and ranked below production code, so including them cannot displace production results.", "default": true},
                         "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
                     },
                     "required": ["project_id", "root_path"]
@@ -391,7 +392,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                     },
                     "required": ["project_id", "file_path"]
                 }).as_object().unwrap().clone())),
-            Tool::new("get_symbol_source", "Return the exact source of a single symbol, sliced from its file by the symbol's line range. Pass an id from get_file_outline or search_symbols. This reads one function/method instead of a whole file, which is the main way to keep context small.", Arc::new(serde_json::json!({
+            Tool::new("get_symbol_source", "Return the exact source of a single symbol, sliced from its file by the symbol's line range. Pass an id from get_file_outline or search_symbols. This reads one function/method instead of a whole file, which is the main way to keep context small. The source is verified against the revision the file was indexed at; if the file has changed since, \"freshness\" reports \"stale\" (or \"unreadable\"/\"unverified\") and the body captured at index time is returned instead of a misaligned slice of the live file.", Arc::new(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project"},
@@ -3084,10 +3085,22 @@ impl EnhancedContextMcpServer {
                     .ensure_project(project_id)
                     .await?;
 
+                // Test code is indexed by default; callers can still narrow a
+                // run to production sources when they know they want that.
+                let include_tests = args
+                    .get("include_tests")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+
                 let report = self
                     .container
                     .graph_memory_service
-                    .index_directory(project_id, std::path::Path::new(root_path), session_id)
+                    .index_directory(
+                        project_id,
+                        std::path::Path::new(root_path),
+                        session_id,
+                        crate::parser::DiscoveryOptions { include_tests },
+                    )
                     .await?;
                 let content = serde_json::to_string_pretty(&report).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
