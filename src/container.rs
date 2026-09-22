@@ -70,6 +70,44 @@ const ENV_OLLAMA_BASE_URL: &str = "OLLAMA_BASE_URL";
 /// Environment variable overriding the embedding model.
 const ENV_EMBEDDING_MODEL: &str = "CONTEXT_EMBEDDING_MODEL";
 
+/// Environment variable that permits an embedding endpoint off this machine.
+///
+/// Embedding sends symbol source to whatever serves the endpoint. Locally that is
+/// the user's own Ollama; anywhere else it is source code leaving the machine, so
+/// it has to be a deliberate choice rather than a side effect of an environment
+/// variable someone set.
+const ENV_ALLOW_REMOTE_EMBEDDINGS: &str = "CONTEXT_ALLOW_REMOTE_EMBEDDINGS";
+
+/// Whether an endpoint host is this machine.
+///
+/// Deliberately a small hand-rolled parse: the crate talks to Ollama over plain
+/// HTTP and carries no URL parser, and the only question being asked is whether
+/// the host is a loopback name or address.
+fn is_loopback_endpoint(base_url: &str) -> bool {
+    let after_scheme = base_url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(base_url);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(stripped) = host_port.strip_prefix('[') {
+        // Bracketed IPv6, e.g. "[::1]:11434".
+        stripped.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+
+    matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127.") || host.is_empty()
+}
+
+/// Whether the configured endpoint may be used.
+///
+/// Split out from construction so the decision is testable without building a
+/// whole container.
+fn may_use_embedding_endpoint(base_url: &str, allowed_remotely: bool) -> bool {
+    is_loopback_endpoint(base_url) || allowed_remotely
+}
+
 /// Schema version recorded against stored embeddings.
 const DEFAULT_EMBEDDING_VERSION: &str = "1";
 
@@ -126,6 +164,22 @@ impl AppContainer {
             std::env::var(ENV_EMBEDDING_MODEL).ok(),
         );
 
+        // Disclose and gate where source goes before any embedding is requested.
+        let allowed_remotely = std::env::var(ENV_ALLOW_REMOTE_EMBEDDINGS).is_ok();
+        if !may_use_embedding_endpoint(&base_url, allowed_remotely) {
+            return Err(anyhow::anyhow!(
+                "OLLAMA_BASE_URL is '{base_url}', which is not on this machine. \
+                 Embedding sends symbol source there. Set \
+                 {ENV_ALLOW_REMOTE_EMBEDDINGS}=1 to allow it deliberately."
+            ));
+        }
+        if !is_loopback_endpoint(&base_url) {
+            tracing::warn!(
+                base_url = %base_url,
+                "{ENV_ALLOW_REMOTE_EMBEDDINGS} is set: symbol source will be sent off this machine"
+            );
+        }
+
         let backend = OllamaEmbeddingBackend::new(base_url, model.clone());
         tracing::info!(
             base_url = backend.base_url(),
@@ -146,6 +200,17 @@ impl AppContainer {
         embedding_backend: Arc<dyn EmbeddingService>,
         embedding_model: impl Into<String>,
     ) -> Result<Self> {
+        // The store holds symbol source, so it is owner-only before anything
+        // writes to it. Enforced here rather than in `main` so every entry point
+        // — including tests and any future binary — gets the same protection.
+        match crate::db::permissions::enforce_or_refuse(std::path::Path::new(db_path)) {
+            Ok(paths) if !paths.is_empty() => {
+                tracing::info!(paths = ?paths, "Restricted storage to owner-only");
+            }
+            Ok(_) => {}
+            Err(message) => return Err(anyhow::anyhow!(message)),
+        }
+
         let pool = Arc::new(ConnectionPool::new(
             db_path,
             POOL_MAX_CONNECTIONS,
@@ -328,5 +393,46 @@ mod tests {
         let backend = OllamaEmbeddingBackend::new(base_url, model);
         assert_eq!(backend.base_url(), DEFAULT_OLLAMA_BASE_URL);
         assert_eq!(backend.model(), DEFAULT_EMBEDDING_MODEL);
+    }
+}
+
+#[cfg(test)]
+mod endpoint_guard_tests {
+    use super::*;
+
+    #[test]
+    fn loopback_endpoints_are_recognised() {
+        assert!(is_loopback_endpoint("http://localhost:11434"));
+        assert!(is_loopback_endpoint("http://127.0.0.1:11434"));
+        assert!(is_loopback_endpoint("http://127.0.0.2:11434"));
+        assert!(is_loopback_endpoint("http://[::1]:11434"));
+        assert!(is_loopback_endpoint("http://localhost"));
+        // A bare host, as someone might set it by hand.
+        assert!(is_loopback_endpoint("localhost:11434"));
+        // Credentials in the authority must not confuse the host parse.
+        assert!(is_loopback_endpoint("http://user:pw@localhost:11434"));
+    }
+
+    #[test]
+    fn off_machine_endpoints_are_not_loopback() {
+        assert!(!is_loopback_endpoint("http://ollama.internal:11434"));
+        assert!(!is_loopback_endpoint("https://embeddings.example.com"));
+        assert!(!is_loopback_endpoint("http://10.0.0.5:11434"));
+        assert!(!is_loopback_endpoint("http://192.168.1.10:11434"));
+    }
+
+    #[test]
+    fn a_remote_endpoint_needs_the_explicit_opt_in() {
+        // The default is local only...
+        assert!(may_use_embedding_endpoint("http://localhost:11434", false));
+        assert!(!may_use_embedding_endpoint(
+            "http://embeddings.example.com",
+            false
+        ));
+        // ...and going remote has to be a deliberate choice.
+        assert!(may_use_embedding_endpoint(
+            "http://embeddings.example.com",
+            true
+        ));
     }
 }
