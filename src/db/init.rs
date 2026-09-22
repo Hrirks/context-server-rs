@@ -26,6 +26,9 @@ pub fn apply_schema(conn: &Connection) -> Result<()> {
             name TEXT NOT NULL,
             description TEXT,
             repository_url TEXT,
+            -- The directory this project may index. NULL means none is registered,
+            -- and indexing is refused rather than permitted by default.
+            allowed_root TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
@@ -291,11 +294,12 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
         "created_at",
         "TEXT DEFAULT (datetime('now'))",
     ),
+    ("projects", "allowed_root", "TEXT"),
 ];
 
 /// Shape of the schema this build expects. Bump it whenever a table changes
 /// shape, so a database written by an older build can be recognised.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Schema version recorded in the database; 0 means it predates versioning.
 pub fn schema_version(conn: &Connection) -> Result<i64> {

@@ -8,6 +8,12 @@ pub struct Project {
     pub repository_url: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// The directory this project is allowed to index, canonicalised.
+    ///
+    /// `None` means no root has been registered and nothing is trusted for the
+    /// project yet: indexing is refused rather than permitted by default.
+    #[serde(default)]
+    pub allowed_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
