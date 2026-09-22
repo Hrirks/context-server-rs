@@ -31,7 +31,18 @@ const SKIPPED_DIRECTORIES: [&str; 12] = [
 ];
 
 /// Guard against being pointed at an enormous tree by accident.
-const MAX_DISCOVERED_FILES: usize = 5_000;
+///
+/// Hitting this cap truncates the index, so discovery reports it instead of
+/// returning a partial file list that looks complete.
+pub const MAX_DISCOVERED_FILES: usize = 5_000;
+
+/// What discovery found, and whether the walk stopped early.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Discovery {
+    pub files: Vec<PathBuf>,
+    /// `true` when the walk stopped at the file cap, so `files` is partial.
+    pub truncated: bool,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -191,11 +202,23 @@ pub async fn chunk_file_async(path: PathBuf) -> Result<Vec<SemanticChunk>, Parse
 /// Skips build output, dependency trees, and test directories. Discovery is
 /// plain filesystem work and is cheap enough to run inline.
 pub fn discover_sources(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
+    Ok(discover_with_limit(root, MAX_DISCOVERED_FILES)?.files)
+}
+
+/// As [`discover_sources`], but reports whether the walk hit `max_files`.
+///
+/// The cap exists so an accidental index of a huge tree cannot run away. When it
+/// bites, the caller has to know: an index that silently covers part of a tree
+/// reports "everything is indexed" while missing code.
+pub fn discover_with_limit(root: &Path, max_files: usize) -> Result<Discovery, ParseError> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
+    let mut truncated = false;
 
     while let Some(directory) = stack.pop() {
-        if found.len() >= MAX_DISCOVERED_FILES {
+        if found.len() >= max_files {
+            // Reached only with directories still queued, so the walk is partial.
+            truncated = true;
             break;
         }
 
@@ -206,6 +229,11 @@ pub fn discover_sources(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
         };
 
         for entry in entries.flatten() {
+            if found.len() >= max_files {
+                // A single directory can hold more files than the cap allows.
+                truncated = true;
+                break;
+            }
             let path = entry.path();
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
@@ -226,7 +254,10 @@ pub fn discover_sources(root: &Path) -> Result<Vec<PathBuf>, ParseError> {
     }
 
     found.sort();
-    Ok(found)
+    Ok(Discovery {
+        files: found,
+        truncated,
+    })
 }
 
 /// Discover and parse every supported source under a root, off the runtime.
