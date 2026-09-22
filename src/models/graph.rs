@@ -17,6 +17,9 @@ pub struct GraphSymbol {
     pub start_line: usize,
     pub end_line: usize,
     pub text: String,
+    /// Whether this declaration belongs to test code. Tests are indexed, but
+    /// ranked below production so they cannot displace it.
+    pub is_test: bool,
     pub created_at: String,
 }
 
@@ -103,6 +106,10 @@ pub struct IndexReport {
     pub project_id: String,
     /// Number of files parsed and (re)indexed this run.
     pub files_indexed: usize,
+    /// Of [`IndexReport::files_indexed`], how many hold production code.
+    pub files_indexed_production: usize,
+    /// Of [`IndexReport::files_indexed`], how many hold test code.
+    pub files_indexed_tests: usize,
     /// Number of files that were unchanged and skipped.
     pub files_skipped: usize,
     /// Number of previously-indexed files no longer present on disk.
@@ -182,6 +189,10 @@ pub struct IndexedFile {
     pub language: String,
     /// Symbols parsed from this file (the file/package/import nodes excluded).
     pub symbol_count: usize,
+    /// Whether the file holds test code. Filled in by the service, which owns
+    /// the classification rules.
+    #[serde(default)]
+    pub is_test: bool,
 }
 
 /// How well a returned fragment's source is known to match its metadata.

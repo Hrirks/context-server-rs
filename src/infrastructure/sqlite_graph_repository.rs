@@ -41,6 +41,9 @@ impl SqliteGraphRepository {
                 start_line INTEGER NOT NULL,
                 end_line INTEGER NOT NULL,
                 text TEXT NOT NULL,
+                -- Test code is indexed too, but marked so retrieval can rank
+                -- production above it rather than being blind to it.
+                is_test INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
 
@@ -96,8 +99,8 @@ impl SqliteGraphRepository {
     }
 }
 
-const SYMBOL_COLUMNS: &str =
-    "id, project_id, file_path, name, kind, language, signature, start_line, end_line, text, created_at";
+const SYMBOL_COLUMNS: &str = "id, project_id, file_path, name, kind, language, signature, \
+     start_line, end_line, text, created_at, is_test";
 
 const INDEXED_FILE_COLUMNS: &str =
     "project_id, file_path, content_hash, git_rev, size_bytes, mtime_ns, indexed_at";
@@ -127,6 +130,7 @@ fn row_to_symbol(row: &Row) -> rusqlite::Result<GraphSymbol> {
         end_line: row.get::<_, i64>(8)? as usize,
         text: row.get(9)?,
         created_at: row.get(10)?,
+        is_test: row.get::<_, i64>(11)? != 0,
     })
 }
 
@@ -174,12 +178,13 @@ impl GraphRepository for SqliteGraphRepository {
             r#"
             INSERT INTO context_symbols (
                 id, project_id, file_path, name, kind, language, signature,
-                start_line, end_line, text, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                start_line, end_line, text, is_test, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 signature = excluded.signature,
                 text = excluded.text,
-                end_line = excluded.end_line
+                end_line = excluded.end_line,
+                is_test = excluded.is_test
             "#,
             params![
                 symbol.id,
@@ -192,6 +197,7 @@ impl GraphRepository for SqliteGraphRepository {
                 symbol.start_line as i64,
                 symbol.end_line as i64,
                 symbol.text,
+                symbol.is_test,
                 symbol.created_at,
             ],
         )
@@ -342,6 +348,9 @@ impl GraphRepository for SqliteGraphRepository {
                     file_path: row.get(0)?,
                     language: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     symbol_count: row.get::<_, i64>(2)? as usize,
+                    // Classification is the parser's job, not persistence's; the
+                    // service fills this in before returning to a caller.
+                    is_test: false,
                 })
             })
             .map_err(|e| McpError::internal_error(format!("Failed to query files: {e}"), None))?
@@ -677,6 +686,7 @@ mod tests {
             start_line: 1,
             end_line: 2,
             text: format!("fn {name}() {{}}"),
+            is_test: false,
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }
     }

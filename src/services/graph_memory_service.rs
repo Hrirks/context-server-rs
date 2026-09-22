@@ -22,8 +22,8 @@ use crate::models::graph::{
     RelatedSymbol, SourceFreshness, SymbolContext, SymbolOutline, SymbolSource,
 };
 use crate::parser::{
-    chunk_file_async, discover_with_limit, ChunkKind, ReferenceKind, SemanticChunk, SourceLanguage,
-    MAX_DISCOVERED_FILES,
+    chunk_file_async, discover_with_options, is_test_path, ChunkKind, DiscoveryOptions,
+    ReferenceKind, SemanticChunk, SourceLanguage, MAX_DISCOVERED_FILES,
 };
 use crate::repositories::GraphRepository;
 use crate::services::EmbeddingStoreService;
@@ -39,6 +39,14 @@ const CONTEXT_SEED_LIMIT: usize = 8;
 const CONTEXT_SEED_OVERFETCH: usize = 8;
 /// Score multiplier applied per graph hop away from a seed.
 const CONTEXT_DISTANCE_DECAY: f32 = 0.5;
+/// Score multiplier for declarations that live in test code.
+///
+/// Tests are worth retrieving — a test is often the clearest statement of what a
+/// symbol must do — but a test that happens to match a query must not outrank the
+/// production symbol it exercises. Dropping tests from the index made "what calls
+/// this?" answers incomplete; ranking them lower gets the same protection without
+/// the blind spot.
+const CONTEXT_TEST_PENALTY: f32 = 0.5;
 /// Hard cap on bundle size, independent of the token budget.
 const CONTEXT_MAX_ITEMS: usize = 64;
 /// Rough per-item cost of the outline metadata, in tokens.
@@ -89,15 +97,19 @@ impl GraphMemoryService {
     /// Edges pointing *into* a re-indexed file from files that were not
     /// re-parsed are carried across the rewrite and restored when the
     /// declaration they targeted still exists (see [`IndexReport::edges_reconnected`]).
+    /// `options` controls what the walk includes. Test directories are indexed by
+    /// default and marked as test code; a caller can exclude them for a narrow run.
     pub async fn index_directory(
         &self,
         project_id: &str,
         root: &Path,
         session_id: &str,
+        options: DiscoveryOptions,
     ) -> Result<IndexReport, McpError> {
-        let discovery = discover_with_limit(root, MAX_DISCOVERED_FILES).map_err(|e| {
-            McpError::internal_error(format!("Failed to discover sources: {e}"), None)
-        })?;
+        let discovery =
+            discover_with_options(root, MAX_DISCOVERED_FILES, options).map_err(|e| {
+                McpError::internal_error(format!("Failed to discover sources: {e}"), None)
+            })?;
         let files = discovery.files;
         if discovery.truncated {
             // Never let a partial index present itself as complete.
@@ -287,6 +299,7 @@ impl GraphMemoryService {
         let mut new_symbol_ids: HashMap<(String, String, String), Vec<String>> = HashMap::new();
         let mut embedded = 0usize;
         let mut embed_failures = 0usize;
+        let mut indexed_tests = 0usize;
 
         // References whose target id cannot be resolved until the whole project
         // has been indexed (a call may target a symbol defined in another file).
@@ -299,6 +312,12 @@ impl GraphMemoryService {
             let file_path = file.display().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             let file_id = symbol_id(project_id, &file_path, &file_path, "file", 0);
+            // Classified once per file: every declaration in a test file is test
+            // code, and the file node itself is what makes the counts add up.
+            let file_is_test = is_test_path(&file_path);
+            if file_is_test {
+                indexed_tests += 1;
+            }
 
             let file_symbol = GraphSymbol {
                 id: file_id.clone(),
@@ -314,6 +333,7 @@ impl GraphMemoryService {
                 // file node carrying a hash as its source is how a stale read went
                 // unnoticed. Left empty so nothing can mistake it for source.
                 text: String::new(),
+                is_test: file_is_test,
                 created_at: now.clone(),
             };
             self.repository.upsert_symbol(&file_symbol).await?;
@@ -357,6 +377,7 @@ impl GraphMemoryService {
                     start_line: chunk.start_line,
                     end_line: chunk.end_line,
                     text: chunk.text.clone(),
+                    is_test: file_is_test,
                     created_at: now.clone(),
                 };
                 self.repository.upsert_symbol(&symbol).await?;
@@ -558,6 +579,8 @@ impl GraphMemoryService {
         Ok(IndexReport {
             project_id: project_id.to_string(),
             files_indexed: changed_files.len(),
+            files_indexed_production: changed_files.len().saturating_sub(indexed_tests),
+            files_indexed_tests: indexed_tests,
             files_skipped,
             files_removed,
             symbols_indexed,
@@ -721,7 +744,11 @@ impl GraphMemoryService {
                         if symbol.project_id != project_id || !kind_indexable(&symbol.kind) {
                             continue;
                         }
-                        resolved.push((symbol, hit.similarity.max(0.0), Some(hit.similarity)));
+                        let mut score = hit.similarity.max(0.0);
+                        if symbol.is_test {
+                            score *= CONTEXT_TEST_PENALTY;
+                        }
+                        resolved.push((symbol, score, Some(hit.similarity)));
                     }
                     if !resolved.is_empty() {
                         semantic = true;
@@ -742,7 +769,12 @@ impl GraphMemoryService {
                 .await?
             {
                 if kind_indexable(&symbol.kind) {
-                    seeds.push((symbol, 1.0, None));
+                    let score = if symbol.is_test {
+                        CONTEXT_TEST_PENALTY
+                    } else {
+                        1.0
+                    };
+                    seeds.push((symbol, score, None));
                 }
             }
         }
@@ -964,7 +996,12 @@ impl GraphMemoryService {
     /// The human-review surface for an index: answers "what did indexing
     /// actually pick up?" without walking the symbol graph.
     pub async fn indexed_files(&self, project_id: &str) -> Result<Vec<IndexedFile>, McpError> {
-        self.repository.list_indexed_files(project_id).await
+        let mut files = self.repository.list_indexed_files(project_id).await?;
+        // The classification rules live with the parser, not in persistence.
+        for file in &mut files {
+            file.is_test = is_test_path(&file.file_path);
+        }
+        Ok(files)
     }
 
     /// Token-efficient structural outline of one indexed file.
@@ -1621,7 +1658,7 @@ mod tests {
 
         let service = build(false);
         let report = service
-            .index_directory("p1", dir.path(), "session-1")
+            .index_directory("p1", dir.path(), "session-1", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1680,7 +1717,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1736,7 +1773,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         let target = service
@@ -1760,7 +1797,7 @@ mod tests {
         );
 
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         let target = service
@@ -1790,7 +1827,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         let target = service
@@ -1824,7 +1861,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1838,6 +1875,146 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_paths_are_classified_by_directory_and_by_filename() {
+        // Directory conventions.
+        assert!(is_test_path("/repo/tests/helper.go"));
+        assert!(is_test_path("app/integration_test/flow.dart"));
+
+        // Filename conventions, one per language this build parses.
+        assert!(is_test_path("/repo/pkg/main_test.go"));
+        assert!(is_test_path("/repo/lib/widget_test.dart"));
+        assert!(is_test_path("/repo/lib/test_widget.dart"));
+        assert!(is_test_path(
+            "/repo/src/main/java/com/x/UserServiceTest.java"
+        ));
+        assert!(is_test_path("/repo/src/main/java/com/x/UserServiceIT.java"));
+
+        // Production code, including names that merely contain "test".
+        assert!(!is_test_path("/repo/pkg/main.go"));
+        assert!(!is_test_path("/repo/src/contest.java"));
+        assert!(!is_test_path("/repo/libs/latest/thing.go"));
+    }
+
+    #[tokio::test]
+    async fn test_directories_are_indexed_and_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc target() int {\n\treturn 1\n}\n",
+        );
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            tests_dir.join("suite_test.go"),
+            "package tests\n\nfunc TestTarget() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+
+        let service = build(false);
+        let report = service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(report.files_indexed, 2);
+        assert_eq!(report.files_indexed_tests, 1);
+        assert_eq!(report.files_indexed_production, 1);
+
+        let files = service.indexed_files("p1").await.unwrap();
+        let test_file = files
+            .iter()
+            .find(|file| file.file_path.contains("tests/"))
+            .expect("a test directory must be indexed, not skipped");
+        assert!(test_file.is_test);
+        assert!(files.iter().any(|file| !file.is_test));
+    }
+
+    #[tokio::test]
+    async fn production_code_outranks_a_test_of_the_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc target() int {\n\treturn 1\n}\n",
+        );
+        // Same directory and the only difference is which one is production, so
+        // the ranking difference cannot come from anything but the test mark.
+        write_source(
+            dir.path(),
+            "main_test.go",
+            "package main\n\nfunc TestTarget() int {\n\treturn target()\n}\n",
+        );
+
+        let service = build(false);
+        service
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
+            .await
+            .unwrap();
+
+        let bundle = service
+            .assemble_code_context("p1", "target", 4000, "s")
+            .await
+            .unwrap();
+        let names: Vec<&str> = bundle
+            .items
+            .iter()
+            .map(|item| item.symbol.name.as_str())
+            .collect();
+
+        // Tests are indexed rather than invisible...
+        assert!(
+            names.contains(&"TestTarget"),
+            "tests must be indexed: {names:?}"
+        );
+        assert!(
+            names.contains(&"target"),
+            "production must be indexed: {names:?}"
+        );
+        // ...but a test does not outrank the code it exercises.
+        assert_eq!(bundle.items[0].symbol.name, "target", "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn tests_can_still_be_excluded_for_a_narrow_run() {
+        let dir = tempfile::tempdir().unwrap();
+        write_source(
+            dir.path(),
+            "main.go",
+            "package main\n\nfunc target() int {\n\treturn 1\n}\n",
+        );
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            tests_dir.join("suite_test.go"),
+            "package tests\n\nfunc TestThing() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+
+        let service = build(false);
+        let report = service
+            .index_directory(
+                "p1",
+                dir.path(),
+                "s",
+                DiscoveryOptions {
+                    include_tests: false,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(report.files_indexed, 1);
+        assert_eq!(report.files_indexed_tests, 0);
+        assert!(service
+            .indexed_files("p1")
+            .await
+            .unwrap()
+            .iter()
+            .all(|file| !file.is_test));
+    }
+
     #[tokio::test]
     async fn traverse_returns_bounded_neighborhood() {
         let dir = tempfile::tempdir().unwrap();
@@ -1849,7 +2026,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1874,7 +2051,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1915,7 +2092,7 @@ mod tests {
 
         let service = build(true);
         let report = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1941,7 +2118,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1967,7 +2144,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "sess")
+            .index_directory("p1", dir.path(), "sess", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -1985,7 +2162,7 @@ mod tests {
         let service = build(false);
 
         let first = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         assert_eq!(first.files_indexed, 2);
@@ -1993,7 +2170,7 @@ mod tests {
         assert_eq!(first.files_removed, 0);
 
         let second = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         assert_eq!(second.files_indexed, 0);
@@ -2004,7 +2181,7 @@ mod tests {
         std::fs::remove_file(dir.path().join("b.go")).unwrap();
 
         let third = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         assert_eq!(third.files_indexed, 1);
@@ -2026,7 +2203,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2055,7 +2232,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2084,7 +2261,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2114,7 +2291,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2178,7 +2355,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2224,7 +2401,7 @@ mod tests {
 
         let service = build(true);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2260,7 +2437,7 @@ mod tests {
         // expected seeding order deterministic.
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2296,7 +2473,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2329,7 +2506,7 @@ mod tests {
 
         let service = build(true);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2390,7 +2567,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2450,7 +2627,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2490,7 +2667,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2530,7 +2707,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2551,7 +2728,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2631,7 +2808,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
         let callee = function_named(&service, "callee").await;
@@ -2650,7 +2827,7 @@ mod tests {
             "package main\n\nfunc callee() {}\n\n// touched\n",
         );
         let report = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2695,7 +2872,7 @@ mod tests {
 
         let service = build(false);
         service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 
@@ -2707,7 +2884,7 @@ mod tests {
             "package main\n\nfunc renamed() {}\n",
         );
         let report = service
-            .index_directory("p1", dir.path(), "s")
+            .index_directory("p1", dir.path(), "s", DiscoveryOptions::default())
             .await
             .unwrap();
 

@@ -350,6 +350,7 @@ impl ServerHandler for EnhancedContextMcpServer {
                     "properties": {
                         "project_id": {"type": "string", "description": "The ID of the project to index"},
                         "root_path": {"type": "string", "description": "The directory containing the source to index"},
+                        "include_tests": {"type": "boolean", "description": "Whether to index test directories (test/, tests/, integration_test/). Defaults to true. Test symbols are marked either way and ranked below production code, so including them cannot displace production results.", "default": true},
                         "session_id": {"type": "string", "description": "Optional conversation session ID for delta memory"}
                     },
                     "required": ["project_id", "root_path"]
@@ -3084,10 +3085,22 @@ impl EnhancedContextMcpServer {
                     .ensure_project(project_id)
                     .await?;
 
+                // Test code is indexed by default; callers can still narrow a
+                // run to production sources when they know they want that.
+                let include_tests = args
+                    .get("include_tests")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+
                 let report = self
                     .container
                     .graph_memory_service
-                    .index_directory(project_id, std::path::Path::new(root_path), session_id)
+                    .index_directory(
+                        project_id,
+                        std::path::Path::new(root_path),
+                        session_id,
+                        crate::parser::DiscoveryOptions { include_tests },
+                    )
                     .await?;
                 let content = serde_json::to_string_pretty(&report).map_err(|e| {
                     McpError::internal_error(format!("Serialization error: {e}"), None)
